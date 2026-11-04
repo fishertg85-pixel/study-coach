@@ -271,6 +271,13 @@ details.aset summary{min-height:44px;display:flex;align-items:center;cursor:poin
     <div id="t-contents" class="panel"></div>
     <div id="t-lesson" class="panel" hidden>
       <p id="n-noaudio" class="notice" hidden>Audio playback is not available in this view. The lesson, quizzes and downloads still work.</p>
+      <details id="pron" class="aset"><summary>Pronunciations for this lesson <span id="pron-n" class="muted small"></span></summary>
+        <p class="muted small">For hard words, such as drug names, type the word and spell it the way it sounds, with capitals on the stressed syllable. Only the audio changes. The text on screen stays as written.</p>
+        <div class="aset-grid">
+          <label>Word or term<input id="pr-term" type="text" maxlength="60" placeholder="furosemide"></label>
+          <label>Say it as<input id="pr-say" type="text" maxlength="80" placeholder="fyoor-OH-seh-mide"></label></div>
+        <div class="row"><button id="pr-add" class="btn sm">Add</button><button id="pr-test" class="btn sm">Hear it</button></div>
+        <ul id="pr-list" class="flist"></ul></details>
       <div id="t-lesson-body" class="panel"></div>
     </div>
     <div id="t-guide" hidden></div>
@@ -423,13 +430,13 @@ function ago(ts){if(!ts)return 'never';var d=Math.floor((Date.now()-ts)/864e5);r
 function newDoc(id,course,progress){
   return {kind:'lesson',id:id,title:course.title,category:course.category||'General',created:Date.now(),updated:Date.now(),course:course,
     progress:progress||{step:0,answers:{}},
-    stats:{totalMs:0,sessionCount:0,firstStudyAt:0,lastStudyAt:0,segMs:{},segPasses:{}},sessions:[],attempts:[],_saved:false};
+    stats:{totalMs:0,sessionCount:0,firstStudyAt:0,lastStudyAt:0,segMs:{},segPasses:{}},sessions:[],attempts:[],pron:[],_saved:false};
 }
 function plain(d,noCourse){
   var a=(d.progress&&d.progress.answers)||{};
   var o={kind:'lesson',id:d.id,title:d.title,category:d.category,created:d.created,updated:d.updated,
     progress:{step:(d.progress&&d.progress.step)||0,answers:Object.keys(a).map(function(k){return [k,a[k]]})},
-    stats:d.stats,sessions:d.sessions,attempts:d.attempts};
+    stats:d.stats,sessions:d.sessions,attempts:d.attempts,pron:d.pron||[]};
   if(!noCourse)o.course=d.course;
   return clone(o);
 }
@@ -439,7 +446,7 @@ function normDoc(x){
   d.progress={step:(d.progress&&d.progress.step)||0,answers:ao};
   d.stats=Object.assign({totalMs:0,sessionCount:0,firstStudyAt:0,lastStudyAt:0},d.stats||{});
   d.stats.segMs=d.stats.segMs||{};d.stats.segPasses=d.stats.segPasses||{};
-  d.sessions=d.sessions||[];d.attempts=d.attempts||[];d.category=d.category||'General';d._saved=true;
+  d.sessions=d.sessions||[];d.attempts=d.attempts||[];d.pron=Array.isArray(d.pron)?d.pron:[];d.category=d.category||'General';d._saved=true;
   return d;
 }
 function localDocs(){
@@ -573,7 +580,7 @@ function openDoc(d){
   if(c.assessment.length&&c.assessment.every(function(_,j){return S.answers['a'+j]!==undefined}))S.attemptDone.a=true;
   $('#c-title').textContent=c.title;$('#c-level').textContent=c.level;
   T.last=Date.now();T.act=Date.now();
-  populateVoices();setStep(S.step);renderGuide();setTab('contents');view('course');
+  populateVoices();renderPron();setStep(S.step);renderGuide();setTab('contents');view('course');
   if(useNatural()&&!NV.tts)loadNatural();
 }
 
@@ -1245,7 +1252,7 @@ function nvSynth(text){
 }
 function nvAhead(){
   if(!NV.tts||!useNatural())return;
-  var n=0;for(var i=S.planIdx+1;i<S.plan.length&&n<3;i++){var x=S.plan[i];if(x.t==='say'){nvSynth(x.text).catch(function(){});n++}}
+  var n=0;for(var i=S.planIdx+1;i<S.plan.length&&n<3;i++){var x=S.plan[i];if(x.t==='say'){nvSynth(applyPron(x.text)).catch(function(){});n++}}
 }
 function speakNatural(text){
   return new Promise(function(res){
@@ -1263,6 +1270,7 @@ function speakNatural(text){
   });
 }
 function speak(text){
+  text=applyPron(text);
   if(!useNatural())return speakDevice(text);
   var ready=NV.tts?Promise.resolve(true):(setStatus('Loading the natural voice...'),loadNatural());
   return ready.then(function(ok){
@@ -1272,6 +1280,34 @@ function speak(text){
       return r;
     });
   });
+}
+/* ---------- pronunciations (per lesson, audio only) ---------- */
+function escRe(t){return t.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}
+function applyPron(text){
+  var l=(S.doc&&S.doc.pron)||[];
+  l.forEach(function(p){
+    if(!p||!p[0]||!p[1])return;
+    text=text.replace(new RegExp('(^|[^A-Za-z0-9])'+escRe(p[0])+'(?![A-Za-z0-9])','gi'),function(m,pre){return pre+p[1]});
+  });
+  return text;
+}
+function renderPron(){
+  var l=(S.doc&&S.doc.pron)||[],ul=$('#pr-list');if(!ul)return;
+  $('#pron-n').textContent=l.length?'· '+l.length+' saved':'';
+  ul.innerHTML=l.length?l.map(function(p,i){return '<li><span><b>'+esc(p[0])+'</b> is said as '+esc(p[1])+'</span> <button class="btn sm" data-prdel="'+i+'" aria-label="Remove '+esc(p[0])+'">Remove</button></li>'}).join(''):'<li class="muted small">None yet.</li>';
+}
+function addPron(){
+  if(!S.doc)return;
+  var t=$('#pr-term').value.trim(),say=$('#pr-say').value.trim();
+  if(!t||!say){msg('Enter the word and how it sounds.');return}
+  var l=S.doc.pron=(S.doc.pron||[]).filter(function(p){return p[0].toLowerCase()!==t.toLowerCase()});
+  l.push([t,say]);touch(false,true);renderPron();$('#pr-term').value='';$('#pr-say').value='';
+  msg('Saved. It applies the next time that word is spoken.');
+}
+function testPron(){
+  var say=$('#pr-say').value.trim()||($('#pr-term').value.trim());
+  if(!say){msg('Type how it sounds first.');return}
+  stopAudio();if(useNatural())nvUnlock();speak(say);
 }
 function think(ms,tok){
   return new Promise(function(res){
@@ -1473,6 +1509,7 @@ document.addEventListener('click',function(e){
   bump();
   if(t.dataset.home){Lib.home=t.dataset.home;renderHome();return}
   if(t.dataset.retake)return retakeScope(t.dataset.retake);
+  if(t.dataset.prdel!==undefined){S.doc.pron.splice(+t.dataset.prdel,1);touch(false,true);return renderPron()}
   if(t.dataset.open)return openFromLib(t.dataset.open);
   if(t.dataset.del){
     if(t.dataset.armed){return deleteLesson(t.dataset.del)}
@@ -1497,6 +1534,8 @@ document.addEventListener('click',function(e){
     case 'x-pptx':return doExport('pptx');
     case 'x-md':return doExport('md');
     case 'x-html':return doExport('html');
+    case 'pr-add':return addPron();
+    case 'pr-test':return testPron();
     case 'x-json':return doExport('json');
     case 'x-csv':return saveFile(slug(S.course.title)+'-study-data.csv',toCsv([S.doc]));
     case 'x-csv-all':{var all=Object.keys(Lib.docs).map(function(k){return Lib.docs[k]});if(!all.length){msg('No lessons in your library yet.');return}return saveFile('study-coach-data.csv',toCsv(all))}
