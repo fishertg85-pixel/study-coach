@@ -1177,11 +1177,12 @@ var NVOICES=[
 function nvFill(){
   var groups=[['b','f','British, female'],['b','m','British, male'],['a','f','American, female'],['a','m','American, male']],h='';
   groups.forEach(function(g){
-    var l=NVOICES.filter(function(v){return v[2]===g[0]&&v[3]===g[1]});
+    var l=NVOICES.filter(function(v){return v[2]===g[0]&&v[3]===g[1]&&/^[AB]/.test(v[4])});
+    if(!l.length)return;
     h+='<optgroup label="'+g[2]+'">'+l.map(function(v){return '<option value="'+v[0]+'">'+esc(v[1])+' ('+g[2]+', quality '+v[4]+')</option>'}).join('')+'</optgroup>';
   });
   $('#s-nvoice').innerHTML=h;
-  if(!NVOICES.some(function(v){return v[0]===settings.nvoice}))settings.nvoice='bf_emma';
+  if(!NVOICES.some(function(v){return v[0]===settings.nvoice&&/^[AB]/.test(v[4])}))settings.nvoice='bf_emma';
   $('#s-nvoice').value=settings.nvoice;
 }
 function engUI(){
