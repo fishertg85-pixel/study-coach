@@ -266,7 +266,10 @@ details.aset summary{min-height:44px;display:flex;align-items:center;cursor:poin
           <label>Thinking pause<select id="s-think"><option value="5">5 seconds</option><option value="8">8 seconds</option><option value="12">12 seconds</option><option value="20">20 seconds</option></select></label>
           <label>Speed<select id="s-rate"><option value="0.85">Slower</option><option value="1">Normal</option><option value="1.15">Faster</option><option value="1.3">Fast</option><option value="1.5">Fastest</option></select></label>
           <label>Accent (English)<select id="s-accent"><option value="en-GB">British</option><option value="en-US">American</option><option value="en-AU">Australian</option><option value="en-IE">Irish</option><option value="">Any</option></select></label>
-          <label>Voice<select id="s-voice"></select></label></div></details>
+          <label>Voice<select id="s-voice"></select></label>
+          <label>Voice engine<select id="s-engine"><option value="browser">Device voice</option><option value="natural">Natural voice (beta, downloads a model)</option></select></label>
+          <label>Natural voice<select id="s-nvoice"></select></label></div>
+        <p id="nv-status" class="muted small" aria-live="polite"></p></details>
       <p id="n-noaudio" class="notice" hidden>Audio playback is not available in this view. The lesson, quizzes and downloads still work.</p>
       <div id="t-lesson-body" class="panel"></div>
     </div>
@@ -317,7 +320,7 @@ var capsReady=(async function(){
 })();
 
 /* ---------- state ---------- */
-var settings=Object.assign({mode:'hands',rate:1,think:8,voice:'',accent:'en-GB'},LS.get('cse:settings')||{});
+var settings=Object.assign({mode:'hands',rate:1,think:8,voice:'',accent:'en-GB',engine:'browser',nvoice:'bf_emma'},LS.get('cse:settings')||{});
 var S={course:null,id:null,step:0,tab:'lesson',answers:{},revealed:{},playing:false,plan:[],planIdx:0,token:0,waiter:null,nowQ:null,gen:null,doc:null,attemptDone:{}};
 
 /* ---------- helpers ---------- */
@@ -1148,7 +1151,7 @@ function markQ(key){
   if(key){var e=$('#q-'+key);if(e){e.classList.add('now');e.scrollIntoView({block:'nearest'})}}
 }
 function reveal(key){S.revealed[key]=true;rerenderQ(key);if(S.nowQ===key){var e=$('#q-'+key);if(e)e.classList.add('now')}}
-function speak(text){
+function speakDevice(text){
   return new Promise(function(res){
     var started=false,done=false,w1,w2;
     function fin(v){if(done)return;done=true;clearTimeout(w1);clearTimeout(w2);res(v)}
@@ -1161,6 +1164,88 @@ function speak(text){
     w1=setTimeout(function(){if(!started)fin('nostart')},5000);
     w2=setTimeout(function(){fin(true)},Math.max(15000,text.length*160/settings.rate));
     try{synth.speak(u)}catch(e){fin('nostart')}
+  });
+}
+/* ---------- natural voice (Kokoro-82M via kokoro-js, Apache-2.0; runs in the browser) ---------- */
+var NV={tts:null,loading:null,failed:false,cache:new Map(),cur:null,el:null,q:Promise.resolve(),silent:null};
+var NVOICES=[['bf_emma','Emma (British, female)'],['bf_isabella','Isabella (British, female)'],['bf_alice','Alice (British, female)'],['bf_lily','Lily (British, female)'],['af_heart','Heart (American, female)'],['af_bella','Bella (American, female)']];
+function useNatural(){return settings.engine==='natural'&&!NV.failed&&/^en/i.test((S.course&&S.course.lang)||'en')}
+function nvStatus(t){var e=$('#nv-status');if(e)e.textContent=t||'';if(S.playing&&t)setStatus(t)}
+function wavBlob(f32,sr){
+  var n=f32.length,b=new ArrayBuffer(44+n*2),v=new DataView(b);
+  function ws(o,t){for(var i=0;i<t.length;i++)v.setUint8(o+i,t.charCodeAt(i))}
+  ws(0,'RIFF');v.setUint32(4,36+n*2,true);ws(8,'WAVE');ws(12,'fmt ');v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);
+  v.setUint32(24,sr,true);v.setUint32(28,sr*2,true);v.setUint16(32,2,true);v.setUint16(34,16,true);ws(36,'data');v.setUint32(40,n*2,true);
+  for(var i=0;i<n;i++){var x=Math.max(-1,Math.min(1,f32[i]));v.setInt16(44+i*2,x<0?x*32768:x*32767,true)}
+  return new Blob([b],{type:'audio/wav'});
+}
+function nvEl(){if(!NV.el)NV.el=new Audio();return NV.el}
+function nvUnlock(){
+  try{
+    var a=nvEl();if(!NV.silent)NV.silent=URL.createObjectURL(wavBlob(new Float32Array(240),24000));
+    a.src=NV.silent;var pr=a.play();if(pr&&pr.catch)pr.catch(function(){});
+  }catch(e){}
+}
+function loadNatural(){
+  if(NV.tts)return Promise.resolve(true);
+  if(NV.loading)return NV.loading;
+  nvStatus('Loading the natural voice. The first time it downloads a model, so keep this page open.');
+  NV.loading=(async function(){
+    try{
+      var m=await (window.__kokoroLoader?window.__kokoroLoader():import('https://cdn.jsdelivr.net/npm/kokoro-js@1.2.0/dist/kokoro.web.js'));
+      var files={};
+      NV.tts=await m.KokoroTTS.from_pretrained('onnx-community/Kokoro-82M-v1.0-ONNX',{dtype:'q8',device:'wasm',progress_callback:function(p){
+        if(p&&p.status==='progress'&&p.file&&p.total){files[p.file]={l:p.loaded,t:p.total};
+          var l=0,t=0;Object.keys(files).forEach(function(k){l+=files[k].l;t+=files[k].t});
+          nvStatus('Downloading the natural voice: '+Math.round(l/t*100)+'% of '+Math.round(t/1048576)+' MB.')}}});
+      nvStatus('Natural voice ready. It is stored in this browser for next time.');
+      return true;
+    }catch(e){
+      NV.failed=true;NV.tts=null;
+      nvStatus('The natural voice could not load in this view, so the device voice is used.');
+      return false;
+    }finally{NV.loading=null}
+  })();
+  return NV.loading;
+}
+function nvSynth(text){
+  var k=settings.nvoice+'|'+text;
+  if(NV.cache.has(k))return NV.cache.get(k);
+  var p=NV.q.catch(function(){}).then(function(){return NV.tts.generate(text,{voice:settings.nvoice,speed:1})})
+    .then(function(a){return URL.createObjectURL(wavBlob(a.audio,a.sampling_rate))});
+  NV.q=p;NV.cache.set(k,p);
+  p.catch(function(){NV.cache.delete(k)});
+  if(NV.cache.size>40){var f=NV.cache.keys().next().value,old=NV.cache.get(f);NV.cache.delete(f);old.then(function(u){URL.revokeObjectURL(u)},function(){})}
+  return p;
+}
+function nvAhead(){
+  if(!NV.tts||!useNatural())return;
+  var n=0;for(var i=S.planIdx+1;i<S.plan.length&&n<3;i++){var x=S.plan[i];if(x.t==='say'){nvSynth(x.text).catch(function(){});n++}}
+}
+function speakNatural(text){
+  return new Promise(function(res){
+    var done=false,a=nvEl();
+    function fin(v){if(done)return;done=true;if(NV.cur&&NV.cur.fin===fin)NV.cur=null;a.onended=null;a.onerror=null;try{a.pause()}catch(e){}res(v)}
+    NV.cur={fin:fin};T.speech=Date.now();
+    nvSynth(text).then(function(url){
+      if(done)return;
+      a.onended=function(){T.speech=Date.now();fin(true)};
+      a.onerror=function(){fin('nostart')};
+      a.src=url;a.playbackRate=settings.rate;
+      var pr=a.play();if(pr&&pr.catch)pr.catch(function(){fin('nostart')});
+      a.onplaying=function(){T.speech=Date.now()};
+    },function(){fin('nostart')});
+  });
+}
+function speak(text){
+  if(!useNatural())return speakDevice(text);
+  var ready=NV.tts?Promise.resolve(true):(setStatus('Loading the natural voice...'),loadNatural());
+  return ready.then(function(ok){
+    if(!ok||!useNatural())return speakDevice(text);
+    return speakNatural(text).then(function(r){
+      if(r==='nostart'){NV.failed=true;nvStatus('The natural voice stopped working, so the device voice is used.');return speakDevice(text)}
+      return r;
+    });
   });
 }
 function think(ms,tok){
@@ -1176,11 +1261,12 @@ function think(ms,tok){
 }
 function startPlay(){
   if(!canSpeak)return;
-  if(S.doc)tick();T.last=Date.now();T.speech=Date.now();S.token++;var tok=S.token;S.playing=true;lockScreen();updateBar();runPlan(tok);
+  if(S.doc)tick();T.last=Date.now();T.speech=Date.now();if(useNatural())nvUnlock();S.token++;var tok=S.token;S.playing=true;lockScreen();updateBar();runPlan(tok);
 }
 function stopAudio(note){
   if(S.doc)tick();
   S.token++;S.playing=false;S.waiter=null;
+  if(NV.cur){var cn=NV.cur;NV.cur=null;cn.fin(true)}
   if(canSpeak)try{synth.cancel()}catch(e){}
   unlockScreen();hl(-1);
   if($('#bar'))updateBar(note);
@@ -1191,6 +1277,7 @@ async function runPlan(tok){
       while(S.planIdx<S.plan.length){
         if(tok!==S.token)return;
         var it=S.plan[S.planIdx];
+        nvAhead();
         markQ(it.q||null);
         if(it.t==='say'){
           hl(it.s!==undefined?it.s:-1);setStatus('Listening');
@@ -1397,6 +1484,10 @@ function bindSettings(){
   $('#s-think').onchange=function(e){settings.think=+e.target.value;saveSet(true)};
   $('#s-rate').onchange=function(e){settings.rate=+e.target.value;saveSet(false)};
   $('#s-voice').onchange=function(e){settings.voice=e.target.value;saveSet(false)};
+  $('#s-engine').value=settings.engine;
+  $('#s-nvoice').innerHTML=NVOICES.map(function(v){return '<option value="'+v[0]+'">'+esc(v[1])+'</option>'}).join('');$('#s-nvoice').value=settings.nvoice;
+  $('#s-engine').onchange=function(e){settings.engine=e.target.value;NV.failed=false;saveSet(false);if(settings.engine==='natural'){nvUnlock();loadNatural()}else nvStatus('Using the device voice.')};
+  $('#s-nvoice').onchange=function(e){settings.nvoice=e.target.value;saveSet(false)};
   $('#s-accent').onchange=function(e){settings.accent=e.target.value;settings.voice='';populateVoices();saveSet(false)};
 }
 function saveSet(rebuild){

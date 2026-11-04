@@ -9,6 +9,7 @@ A single-file web app that builds study lessons from a topic or uploaded documen
 - Evidence rating on each segment (High, Moderate, Low, Insufficient).
 - Library with categories, search and sort, synced per user.
 - Study data: time per lesson and segment, sessions and reviews, quiz attempts, delayed retention check, CSV export.
+- Optional natural voice: Kokoro-82M (Apache-2.0) via kokoro-js, run in the browser; British and American female voices. Falls back to the device voice if the model cannot load.
 - Downloads: PowerPoint, study guide (.md, .html), lesson file (.json).
 
 ## Runtime
