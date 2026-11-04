@@ -185,6 +185,18 @@ details.aset summary{min-height:44px;display:flex;align-items:center;cursor:poin
 
 <div class="wrap">
   <div class="brandrow"><div class="brand">Study Coach</div><a class="blink" href="https://claude.ai/artifact/4oCucJCWgFfgCh49qP1mqP" target="_blank" rel="noopener">Open in browser</a></div>
+  <details id="aset" class="aset"><summary>Voice and audio settings <span id="voice-badge" class="muted small"></span></summary>
+        <div class="aset-grid">
+          <label>Quiz mode<select id="s-mode"><option value="hands">Hands-free: answer read after a pause</option><option value="tap">Interactive: tap your answer</option></select></label>
+          <label>Thinking pause<select id="s-think"><option value="5">5 seconds</option><option value="8">8 seconds</option><option value="12">12 seconds</option><option value="20">20 seconds</option></select></label>
+          <label>Speed<select id="s-rate"><option value="0.85">Slower</option><option value="1">Normal</option><option value="1.15">Faster</option><option value="1.3">Fast</option><option value="1.5">Fastest</option></select></label>
+          <label>Accent (English)<select id="s-accent"><option value="en-GB">British</option><option value="en-US">American</option><option value="en-AU">Australian</option><option value="en-IE">Irish</option><option value="">Any</option></select></label>
+          <label>Voice<select id="s-voice"></select></label>
+          <label>Voice engine<select id="s-engine"><option value="browser">Device voice</option><option value="natural">Natural voice (beta, downloads a model)</option></select></label>
+          <label>Natural voice accent<select id="nv-acc"><option value="b">British</option><option value="a">American</option></select></label>
+          <label>Natural voice gender<select id="nv-gen"><option value="f">Female</option><option value="m">Male</option></select></label>
+          <label>Natural voice<select id="s-nvoice"></select></label></div>
+        <p id="nv-status" class="muted small" aria-live="polite"></p></details>
   <p id="msg" class="msg" role="status" aria-live="polite" hidden></p>
 
   <!-- HOME -->
@@ -260,18 +272,6 @@ details.aset summary{min-height:44px;display:flex;align-items:center;cursor:poin
       <button class="tab" role="tab" data-tab="export">Download</button></div>
     <div id="t-contents" class="panel"></div>
     <div id="t-lesson" class="panel" hidden>
-      <details id="aset" class="aset"><summary>Audio settings <span id="voice-badge" class="muted small"></span></summary>
-        <div class="aset-grid">
-          <label>Quiz mode<select id="s-mode"><option value="hands">Hands-free: answer read after a pause</option><option value="tap">Interactive: tap your answer</option></select></label>
-          <label>Thinking pause<select id="s-think"><option value="5">5 seconds</option><option value="8">8 seconds</option><option value="12">12 seconds</option><option value="20">20 seconds</option></select></label>
-          <label>Speed<select id="s-rate"><option value="0.85">Slower</option><option value="1">Normal</option><option value="1.15">Faster</option><option value="1.3">Fast</option><option value="1.5">Fastest</option></select></label>
-          <label>Accent (English)<select id="s-accent"><option value="en-GB">British</option><option value="en-US">American</option><option value="en-AU">Australian</option><option value="en-IE">Irish</option><option value="">Any</option></select></label>
-          <label>Voice<select id="s-voice"></select></label>
-          <label>Voice engine<select id="s-engine"><option value="browser">Device voice</option><option value="natural">Natural voice (beta, downloads a model)</option></select></label>
-          <label>Natural voice accent<select id="nv-acc"><option value="b">British</option><option value="a">American</option></select></label>
-          <label>Natural voice gender<select id="nv-gen"><option value="f">Female</option><option value="m">Male</option></select></label>
-          <label>Natural voice<select id="s-nvoice"></select></label></div>
-        <p id="nv-status" class="muted small" aria-live="polite"></p></details>
       <p id="n-noaudio" class="notice" hidden>Audio playback is not available in this view. The lesson, quizzes and downloads still work.</p>
       <div id="t-lesson-body" class="panel"></div>
     </div>
