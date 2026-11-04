@@ -260,7 +260,7 @@ details.aset summary{min-height:44px;display:flex;align-items:center;cursor:poin
       <button class="tab" role="tab" data-tab="export">Download</button></div>
     <div id="t-contents" class="panel"></div>
     <div id="t-lesson" class="panel" hidden>
-      <details id="aset" class="aset"><summary>Audio settings</summary>
+      <details id="aset" class="aset"><summary>Audio settings <span id="voice-badge" class="muted small"></span></summary>
         <div class="aset-grid">
           <label>Quiz mode<select id="s-mode"><option value="hands">Hands-free: answer read after a pause</option><option value="tap">Interactive: tap your answer</option></select></label>
           <label>Thinking pause<select id="s-think"><option value="5">5 seconds</option><option value="8">8 seconds</option><option value="12">12 seconds</option><option value="20">20 seconds</option></select></label>
@@ -268,6 +268,8 @@ details.aset summary{min-height:44px;display:flex;align-items:center;cursor:poin
           <label>Accent (English)<select id="s-accent"><option value="en-GB">British</option><option value="en-US">American</option><option value="en-AU">Australian</option><option value="en-IE">Irish</option><option value="">Any</option></select></label>
           <label>Voice<select id="s-voice"></select></label>
           <label>Voice engine<select id="s-engine"><option value="browser">Device voice</option><option value="natural">Natural voice (beta, downloads a model)</option></select></label>
+          <label>Natural voice accent<select id="nv-acc"><option value="b">British</option><option value="a">American</option></select></label>
+          <label>Natural voice gender<select id="nv-gen"><option value="f">Female</option><option value="m">Male</option></select></label>
           <label>Natural voice<select id="s-nvoice"></select></label></div>
         <p id="nv-status" class="muted small" aria-live="polite"></p></details>
       <p id="n-noaudio" class="notice" hidden>Audio playback is not available in this view. The lesson, quizzes and downloads still work.</p>
@@ -320,7 +322,8 @@ var capsReady=(async function(){
 })();
 
 /* ---------- state ---------- */
-var settings=Object.assign({mode:'hands',rate:1,think:8,voice:'',accent:'en-GB',engine:'browser',nvoice:'bf_emma'},LS.get('cse:settings')||{});
+var settings=Object.assign({mode:'hands',rate:1,think:8,voice:'',accent:'en-GB',engine:'natural',nvoice:'bf_emma',nacc:'b',ngen:'f'},LS.get('cse:settings')||{});
+if(settings.engineV!==2){settings.engine='natural';settings.engineV=2}
 var S={course:null,id:null,step:0,tab:'lesson',answers:{},revealed:{},playing:false,plan:[],planIdx:0,token:0,waiter:null,nowQ:null,gen:null,doc:null,attemptDone:{}};
 
 /* ---------- helpers ---------- */
@@ -573,6 +576,7 @@ function openDoc(d){
   $('#c-title').textContent=c.title;$('#c-level').textContent=c.level;
   T.last=Date.now();T.act=Date.now();
   populateVoices();setStep(S.step);renderGuide();setTab('contents');view('course');
+  if(useNatural()&&!NV.tts)loadNatural();
 }
 
 /* ----- library screen ----- */
@@ -1168,9 +1172,25 @@ function speakDevice(text){
 }
 /* ---------- natural voice (Kokoro-82M via kokoro-js, Apache-2.0; runs in the browser) ---------- */
 var NV={tts:null,loading:null,failed:false,cache:new Map(),cur:null,el:null,q:Promise.resolve(),silent:null};
-var NVOICES=[['bf_emma','Emma (British, female)'],['bf_isabella','Isabella (British, female)'],['bf_alice','Alice (British, female)'],['bf_lily','Lily (British, female)'],['af_heart','Heart (American, female)'],['af_bella','Bella (American, female)']];
+var NVOICES=[
+['af_heart','Heart','a','f','A'],['af_bella','Bella','a','f','A-'],['af_nicole','Nicole','a','f','B-'],['af_aoede','Aoede','a','f','C+'],['af_kore','Kore','a','f','C+'],['af_sarah','Sarah','a','f','C+'],['af_alloy','Alloy','a','f','C'],['af_nova','Nova','a','f','C'],['af_sky','Sky','a','f','C-'],['af_jessica','Jessica','a','f','D'],['af_river','River','a','f','D'],
+['am_fenrir','Fenrir','a','m','C+'],['am_michael','Michael','a','m','C+'],['am_puck','Puck','a','m','C+'],['am_echo','Echo','a','m','D'],['am_eric','Eric','a','m','D'],['am_liam','Liam','a','m','D'],['am_onyx','Onyx','a','m','D'],['am_santa','Santa','a','m','D-'],['am_adam','Adam','a','m','F+'],
+['bf_emma','Emma','b','f','B-'],['bf_isabella','Isabella','b','f','C'],['bf_alice','Alice','b','f','D'],['bf_lily','Lily','b','f','D'],
+['bm_fable','Fable','b','m','C'],['bm_george','George','b','m','C'],['bm_lewis','Lewis','b','m','D+'],['bm_daniel','Daniel','b','m','D']];
+function nvList(){return NVOICES.filter(function(v){return v[2]===settings.nacc&&v[3]===settings.ngen})}
+function nvFill(){
+  var l=nvList();
+  $('#s-nvoice').innerHTML=l.map(function(v){return '<option value="'+v[0]+'">'+esc(v[1])+' (quality '+v[4]+')</option>'}).join('');
+  if(!l.some(function(v){return v[0]===settings.nvoice}))settings.nvoice=l[0]?l[0][0]:'bf_emma';
+  $('#s-nvoice').value=settings.nvoice;
+}
+function nvBadge(){
+  var e=$('#voice-badge');if(!e)return;
+  var v=NVOICES.filter(function(x){return x[0]===settings.nvoice})[0];
+  e.textContent=(settings.engine==='natural'&&!NV.failed&&(!S.course||useNatural()))?'· Voice: '+(v?v[1]:'natural')+(NV.tts?'':' (loads on first play)'):'· Voice: device';
+}
 function useNatural(){return settings.engine==='natural'&&!NV.failed&&/^en/i.test((S.course&&S.course.lang)||'en')}
-function nvStatus(t){var e=$('#nv-status');if(e)e.textContent=t||'';if(S.playing&&t)setStatus(t)}
+function nvStatus(t){nvBadge();var e=$('#nv-status');if(e)e.textContent=t||'';if(S.playing&&t)setStatus(t)}
 function wavBlob(f32,sr){
   var n=f32.length,b=new ArrayBuffer(44+n*2),v=new DataView(b);
   function ws(o,t){for(var i=0;i<t.length;i++)v.setUint8(o+i,t.charCodeAt(i))}
@@ -1261,7 +1281,7 @@ function think(ms,tok){
 }
 function startPlay(){
   if(!canSpeak)return;
-  if(S.doc)tick();T.last=Date.now();T.speech=Date.now();if(useNatural())nvUnlock();S.token++;var tok=S.token;S.playing=true;lockScreen();updateBar();runPlan(tok);
+  if(S.doc)tick();T.last=Date.now();T.speech=Date.now();if(useNatural())nvUnlock();nvBadge();S.token++;var tok=S.token;S.playing=true;lockScreen();updateBar();runPlan(tok);
 }
 function stopAudio(note){
   if(S.doc)tick();
@@ -1484,10 +1504,11 @@ function bindSettings(){
   $('#s-think').onchange=function(e){settings.think=+e.target.value;saveSet(true)};
   $('#s-rate').onchange=function(e){settings.rate=+e.target.value;saveSet(false)};
   $('#s-voice').onchange=function(e){settings.voice=e.target.value;saveSet(false)};
-  $('#s-engine').value=settings.engine;
-  $('#s-nvoice').innerHTML=NVOICES.map(function(v){return '<option value="'+v[0]+'">'+esc(v[1])+'</option>'}).join('');$('#s-nvoice').value=settings.nvoice;
-  $('#s-engine').onchange=function(e){settings.engine=e.target.value;NV.failed=false;saveSet(false);if(settings.engine==='natural'){nvUnlock();loadNatural()}else nvStatus('Using the device voice.')};
-  $('#s-nvoice').onchange=function(e){settings.nvoice=e.target.value;saveSet(false)};
+  $('#s-engine').value=settings.engine;$('#nv-acc').value=settings.nacc;$('#nv-gen').value=settings.ngen;nvFill();nvBadge();
+  $('#s-engine').onchange=function(e){settings.engine=e.target.value;NV.failed=false;saveSet(false);nvBadge();if(settings.engine==='natural'){nvUnlock();loadNatural()}else nvStatus('Using the device voice.')};
+  $('#nv-acc').onchange=function(e){settings.nacc=e.target.value;nvFill();saveSet(false);nvBadge()};
+  $('#nv-gen').onchange=function(e){settings.ngen=e.target.value;nvFill();saveSet(false);nvBadge()};
+  $('#s-nvoice').onchange=function(e){settings.nvoice=e.target.value;saveSet(false);nvBadge()};
   $('#s-accent').onchange=function(e){settings.accent=e.target.value;settings.voice='';populateVoices();saveSet(false)};
 }
 function saveSet(rebuild){
