@@ -89,6 +89,14 @@ textarea{resize:vertical;line-height:1.5}
 .kv dt{font:500 12px/1.3 var(--f-mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
 .kv dd{margin:4px 0 0;font:600 20px/1.2 var(--f-display)}
 
+/* courses */
+#v-course.vmode .tab:not([data-tab="exam"]){display:none}
+#v-course.vmode #steps{display:none}
+.crs-act{display:flex;gap:8px;flex-wrap:wrap;margin:4px 0}
+.lrow-n{font:600 18px/1 var(--f-display);color:var(--accent);min-width:1.4em}
+.srow .s-act{flex-wrap:wrap}
+.srow select.mv{width:auto;max-width:170px}
+
 /* generating */
 .gen-list{display:grid;gap:8px;padding-left:20px}
 .gen-list li.wait{color:var(--muted)}
@@ -204,15 +212,17 @@ details.aset summary{min-height:44px;display:flex;align-items:center;cursor:poin
       <button class="tab" role="tab" data-home="new">New lesson</button></div>
 
     <div id="h-lib" class="panel">
-      <div class="seg-head"><h1>Your library</h1><p id="lib-sync" class="muted small"></p></div>
-      <p id="lib-sum" class="sumline muted"></p>
-      <div class="libtools">
-        <input id="lib-q" type="text" placeholder="Search lessons" aria-label="Search lessons">
-        <select id="lib-cat" aria-label="Category"></select>
-        <select id="lib-sort" aria-label="Sort lessons"><option value="recent">Recently studied</option><option value="title">Title</option><option value="time">Most study time</option></select></div>
-      <ul id="lib-list" class="saved"></ul>
-      <div class="row"><button class="btn primary" data-home="new">Build a new lesson</button><button id="x-csv-all" class="btn">Download study data (.csv)</button></div>
-      <p class="muted small">Study time, reviews and quiz attempts are recorded for each lesson. Open a lesson and choose Study data to see how long it takes you to learn it.</p>
+      <div class="seg-head"><h1 id="lib-h">Your courses</h1><p id="lib-sync" class="muted small"></p></div>
+      <div id="lib-top" class="panel">
+        <p id="lib-sum" class="sumline muted"></p>
+        <div class="libtools">
+          <input id="lib-q" type="text" placeholder="Search courses and lessons" aria-label="Search courses and lessons">
+          <select id="lib-sort" aria-label="Sort courses"><option value="recent">Recently studied</option><option value="title">Name</option><option value="time">Most study time</option></select></div>
+        <ul id="lib-list" class="saved"></ul>
+        <div class="row"><button class="btn primary" data-home="new">Build a new lesson</button><button id="x-csv-all" class="btn">Download study data (.csv)</button></div>
+        <p class="muted small">A course holds the lessons on one subject. Open a course to see its lessons in order, add to it, or take a course-wide exam. Study time, reviews and quiz attempts are recorded for every lesson and for the course exam.</p>
+      </div>
+      <div id="lib-course" class="panel" hidden></div>
     </div>
 
     <div id="h-new" class="panel" hidden>
@@ -231,8 +241,8 @@ details.aset summary{min-height:44px;display:flex;align-items:center;cursor:poin
             <span class="muted small">PDF, Word, PowerPoint, text or Markdown. Drop files here, or load a saved lesson file (.json).</span></div>
           <ul id="file-list" class="flist"></ul>
           <span id="file-note" class="muted small" aria-live="polite"></span></div></div>
-      <div class="field"><label for="cat">Category (optional)</label>
-        <input id="cat" list="cat-list" type="text" maxlength="40" placeholder="e.g. Pharmacology. Left blank, Claude suggests one.">
+      <div class="field"><label for="cat">Course (optional)</label>
+        <input id="cat" list="cat-list" type="text" maxlength="40" placeholder="The course this lesson belongs to. Left blank, Claude suggests one.">
         <datalist id="cat-list"></datalist></div>
       <div class="field"><span class="lbl">Level</span>
         <div class="chips" role="radiogroup" aria-label="Level">
@@ -460,7 +470,7 @@ var DEMO={meta:{title:'How Retrieval and Spacing Work',lang:'en-US',level:'Found
   {q:'Which statement matches the review by Dunlosky and colleagues?',options:['Practice testing and distributed practice were both rated high utility','Both were rated low utility','Only spacing was rated high utility','Neither technique was reviewed'],answer:0,rationale:'Both practice testing and distributed practice received the high-utility rating in that review.',segment:1}]};
 
 /* ---------- library, sync and study tracking ---------- */
-var Lib={docs:{},cloud:false,sync:'local',home:'lib',migrated:false,timer:null,errAt:0};
+var Lib={docs:{},recs:{},course:null,cloud:false,sync:'local',home:'lib',migrated:false,timer:null,errAt:0};
 var UCOL=null,dirty={},dirtyCourse={},saveT=null,saving=false;
 var T={last:Date.now(),act:Date.now(),speech:0};
 function clone(x){return JSON.parse(JSON.stringify(x))}
@@ -510,7 +520,81 @@ function localDocs(){
   });
   return m;
 }
-function loadLocalLib(){Lib.docs=localDocs()}
+function localRecSave(r){var k=cslug(r.name);LS.set('cse:r:'+k,r);var ix=LS.get('cse:rindex')||[];if(ix.indexOf(k)<0){ix.push(k);LS.set('cse:rindex',ix)}}
+function loadLocalRecs(){var m={};(LS.get('cse:rindex')||[]).forEach(function(k){var r=LS.get('cse:r:'+k);if(r&&r.name)m[k]=r});return m}
+function loadLocalLib(){Lib.docs=localDocs();Lib.recs=loadLocalRecs()}
+
+/* ----- courses: a course groups lessons by their category; its record keeps lesson order and course exam data ----- */
+function cslug(n){return String(n||'General').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,40)||'general'}
+function recFor(name){
+  var k=cslug(name);
+  if(!Lib.recs[k])Lib.recs[k]={kind:'courserec',id:'cr-'+k,name:name,title:'Course exam: '+name,category:name,order:[],
+    stats:{totalMs:0,sessionCount:0,firstStudyAt:0,lastStudyAt:0,segMs:{},segPasses:{}},sessions:[],attempts:[],exSeen:[],pron:[],created:Date.now(),updated:Date.now(),progress:{step:0,answers:[]}};
+  return Lib.recs[k];
+}
+async function saveRec(r){
+  r.updated=Date.now();var o=clone(r);
+  if(!Lib.cloud){localRecSave(o);return}
+  try{await UCOL.doc('C-'+cslug(r.name)).set(o)}
+  catch(e){if(e&&e.code==='invalid_argument'){localRecSave(o);return}throw e}
+}
+function saveRecQ(r){saveRec(r).catch(function(){msg('Could not save that change to your course. Try again.')})}
+async function writeVirtual(d){
+  var r=recFor(d.name);
+  r.stats=d.stats;r.sessions=d.sessions;r.attempts=d.attempts;r.exSeen=d.exSeen;
+  await saveRec(r);d._saved=true;
+}
+function courseLessons(name){
+  var r=Lib.recs[cslug(name)],ord=(r&&r.order)||[],seen={};
+  var ls=Object.keys(Lib.docs).map(function(k){return Lib.docs[k]});
+  if(S.doc&&!S.doc.virtual&&!Lib.docs[S.doc.id])ls.push(S.doc);
+  ls=ls.filter(function(d){return d&&d.course&&(d.category||'General')===name&&!seen[d.id]&&(seen[d.id]=1)});
+  return ls.sort(function(a,b){
+    var ia=ord.indexOf(a.id),ib=ord.indexOf(b.id);
+    if(ia<0&&ib<0)return (a.created||0)-(b.created||0);
+    if(ia<0)return 1;if(ib<0)return -1;return ia-ib;
+  });
+}
+function courseMove(id,dir){
+  var name=Lib.course,ids=courseLessons(name).map(function(d){return d.id}),i=ids.indexOf(id),j=i+dir;
+  if(i<0||j<0||j>=ids.length)return;
+  var t=ids[i];ids[i]=ids[j];ids[j]=t;
+  var r=recFor(name);r.order=ids;saveRecQ(r);renderLib();
+}
+function moveLesson(id,to){
+  var d=Lib.docs[id];to=String(to||'').trim().slice(0,40);if(!d||!to)return;
+  d.category=to;d.updated=Date.now();if(S.doc&&S.doc.id===id)S.doc.category=to;
+  dirty[id]=d;flushSave();msg('Moved to '+to+'.');renderHome();
+}
+async function renameCourse(old,nu){
+  nu=String(nu||'').trim().slice(0,40);
+  if(!nu||nu===old){msg('Type a new name first.');return}
+  courseLessons(old).forEach(function(d){d.category=nu;d.updated=Date.now();dirty[d.id]=d});
+  var ok=cslug(old),nk=cslug(nu),r=Lib.recs[ok];
+  if(r){
+    var t=Lib.recs[nk];
+    if(t&&nk!==ok){t.attempts=(t.attempts||[]).concat(r.attempts||[]);t.exSeen=(t.exSeen||[]).concat(r.exSeen||[]).slice(-60);t.order=(t.order||[]).concat(r.order||[]);t.stats.totalMs=(t.stats.totalMs||0)+(r.stats.totalMs||0);r=t}
+    else{Lib.recs[nk]=r}
+    if(nk!==ok){
+      delete Lib.recs[ok];
+      try{if(Lib.cloud)await UCOL.doc('C-'+ok).delete()}catch(e){}
+      LS.del('cse:r:'+ok);LS.set('cse:rindex',(LS.get('cse:rindex')||[]).filter(function(x){return x!==ok}));
+    }
+    r.name=nu;r.category=nu;r.title='Course exam: '+nu;r.id='cr-'+nk;
+    saveRecQ(r);
+  }
+  Lib.course=nu;flushSave();msg('Course renamed to '+nu+'.');renderHome();
+}
+function openCourseExam(name){
+  var ls=courseLessons(name),segs=[];
+  ls.forEach(function(l,li){l.course.segments.forEach(function(sg){var g=clone(sg);g._li=li;g._lt=l.title;segs.push(g)})});
+  if(!segs.length){msg('This course has no lessons yet.');return}
+  var r=recFor(name);
+  var c={title:name+' (course)',lang:'en-US',summary:'',objectives:[],source_note:'',category:name,level:'Course',segments:segs,assessment:[],created:r.created,lessons:ls.map(function(l){return l.title})};
+  var d=normDoc(Object.assign(clone(r),{course:c}));
+  d.virtual=true;d.name=name;d.id=r.id;d.category=name;d._saved=true;
+  openDoc(d);setTab('exam');
+}
 
 /* ----- saving (one write at a time, coalesced) ----- */
 function localSave(d){
@@ -524,6 +608,7 @@ function fallbackLocal(d){
   localSave(d);
 }
 async function writeDoc(d,withCourse){
+  if(d.virtual)return writeVirtual(d);
   if(!Lib.cloud){localSave(d);return}
   var ref=UCOL.doc('L-'+d.id);
   if(withCourse){
@@ -578,7 +663,10 @@ function startLibrary(){
       Lib.timer=setTimeout(function(){if(Lib.sync==='connecting'){Lib.sync='slow';renderHome()}},10000);
       UCOL.onSnapshot(function(snap){
         var m={};
-        snap.docs.forEach(function(s){if(s.id.indexOf('L-')===0){var x=s.data();if(x&&x.course&&x.id)m[x.id]=x}});
+        var rm={};
+        snap.docs.forEach(function(s){if(s.id.indexOf('L-')===0){var x=s.data();if(x&&x.course&&x.id)m[x.id]=x}else if(s.id.indexOf('C-')===0){var y=s.data();if(y&&y.name)rm[cslug(y.name)]=y}});
+        if(S.doc&&S.doc.virtual){var vk=cslug(S.doc.name);if(!rm[vk]&&Lib.recs[vk])rm[vk]=Lib.recs[vk]}
+        Lib.recs=rm;
         if(S.doc&&!m[S.doc.id]&&Lib.docs[S.doc.id])m[S.doc.id]=Lib.docs[S.doc.id];
         Lib.docs=m;
         if(!snap.metadata.fromCache){
@@ -597,6 +685,7 @@ async function migrateLocal(){
   for(var i=0;i<ids.length;i++){
     try{var nd=normDoc(local[ids[i]]);nd._saved=false;await writeDoc(nd,true);done.push(nd.id);n++}catch(e){break}
   }
+  var lr=loadLocalRecs();Object.keys(lr).forEach(function(k){if(!Lib.recs[k]){Lib.recs[k]=lr[k];saveRecQ(lr[k])}});
   LS.set('cse:migrated',done);
   if(n)msg('Moved '+n+' lesson'+(n>1?'s':'')+' from this device into your synced library.');
 }
@@ -623,6 +712,7 @@ async function deleteLesson(id){
 function openDoc(d){
   exReset();updReset();
   tick();stopAudio();flushSave();
+  Lib.course=d.virtual?d.name:(d.category||'General');$('#v-course').classList.toggle('vmode',!!d.virtual);
   S.doc=d;S.id=d.id;S.course=d.course;S.answers=d.progress.answers;S.revealed={};S.nowQ=null;S.attemptDone={};
   var c=d.course;
   S.step=Math.max(0,Math.min(d.progress.step||0,c.segments.length));
@@ -650,40 +740,77 @@ function cats(){
   return Object.keys(s).sort();
 }
 function renderCats(){
-  var cs=cats(),sel=$('#lib-cat'),cur=sel.value;
-  sel.innerHTML='<option value="">All categories</option>'+cs.map(function(c){return '<option value="'+esc(c)+'">'+esc(c)+'</option>'}).join('');
-  sel.value=cs.indexOf(cur)>=0?cur:'';
-  $('#cat-list').innerHTML=cs.map(function(c){return '<option value="'+esc(c)+'">'}).join('');
+  $('#cat-list').innerHTML=cats().map(function(c){return '<option value="'+esc(c)+'">'}).join('');
+}
+function lessonLines(d){
+  var m=lessonMetrics(d),n=d.course&&d.course.segments?d.course.segments.length:0;
+  return [n+' segments. '+(m.total?fmtMs(m.total)+' studied':'Not studied yet')+(m.sessions?'. '+m.reviews+' review'+(m.reviews===1?'':'s'):'')+(m.last?'. Last studied '+ago(m.last):''),
+    m.att.length?'Best assessment '+m.best+'%'+(m.first?'. First 80% after '+fmtMs(m.first.ms):'')+(m.retained?'. Retention check passed':''):''];
+}
+function courseAgg(name){
+  var ls=courseLessons(name),r=Lib.recs[cslug(name)],tot=0,last=0,pass=0,ret=0;
+  ls.forEach(function(d){var m=lessonMetrics(d);tot+=m.total;last=Math.max(last,m.last,d.updated||0);if(m.best>=80)pass++;if(m.retained)ret++});
+  var ex=((r&&r.attempts)||[]).filter(function(a){return a.scope==='x'}),best=ex.reduce(function(m,a){return Math.max(m,Math.round(a.ok/a.n*100))},-1);
+  if(r){tot+=(r.stats&&r.stats.totalMs)||0;last=Math.max(last,(r.stats&&r.stats.lastStudyAt)||0)}
+  return {ls:ls,total:tot,last:last,pass:pass,ret:ret,ex:ex,best:best,rec:r};
+}
+function renderCourse(name){
+  var g=courseAgg(name),ls=g.ls,h='';
+  h+='<button class="btn sm" data-cback="1">&larr; All courses</button>';
+  h+='<div class="seg-head"><span class="eyebrow">Course</span><h2>'+esc(name)+'</h2></div>';
+  h+='<dl class="kv"><div><dt>Lessons</dt><dd>'+ls.length+'</dd></div><div><dt>Study time</dt><dd>'+fmtMs(g.total)+'</dd></div>'+
+     '<div><dt>Lessons at 80%+</dt><dd>'+g.pass+' of '+ls.length+'</dd></div>'+
+     '<div><dt>Course exam best</dt><dd>'+(g.best>=0?g.best+'%':'-')+'</dd></div></dl>';
+  h+='<div class="crs-act"><button class="btn primary" data-cadd="1">Add a lesson to this course</button><button class="btn" data-cexam="1">Course exam practice</button></div>';
+  h+='<h3>Lessons in order</h3><ul class="saved">';
+  var others=cats().filter(function(c){return c!==name});
+  ls.forEach(function(d,i){
+    var L=lessonLines(d);
+    h+='<li class="srow"><div class="s-main"><span class="lrow-n">'+(i+1)+'</span><strong>'+esc(d.title)+'</strong><span class="muted small">'+esc(L[0])+'</span>'+(L[1]?'<span class="muted small">'+esc(L[1])+'</span>':'')+'</div>'+
+      '<div class="s-act"><button class="btn sm" data-cmove="u:'+esc(d.id)+'" aria-label="Move up"'+(i===0?' disabled':'')+'>Up</button><button class="btn sm" data-cmove="d:'+esc(d.id)+'" aria-label="Move down"'+(i===ls.length-1?' disabled':'')+'>Down</button>'+
+      '<button class="btn sm primary" data-open="'+esc(d.id)+'">Open</button><button class="btn sm ghost" data-del="'+esc(d.id)+'">Delete</button>'+
+      (others.length?'<select class="mv" data-mv="'+esc(d.id)+'" aria-label="Move this lesson to another course"><option value="">Move to...</option>'+others.map(function(c){return '<option value="'+esc(c)+'">'+esc(c)+'</option>'}).join('')+'</select>':'')+'</div></li>';
+  });
+  h+='</ul>';
+  h+='<h3>Course exam history</h3>';
+  if(g.ex.length){
+    h+='<ul class="flist">'+g.ex.slice().reverse().slice(0,15).map(function(a){return '<li><span>'+Math.round(a.ok/a.n*100)+'% ('+a.ok+' of '+a.n+')</span><span class="muted">'+fmtDateTime(a.ts)+'</span></li>'}).join('')+'</ul>';
+  }else h+='<p class="muted small">No course exams yet. Course exam practice draws questions from every lesson in this course.</p>';
+  h+='<details class="crs-ren"><summary>Rename this course</summary><div class="row"><input id="c-ren" type="text" maxlength="40" value="'+esc(name)+'" aria-label="Course name"><button class="btn" data-cren="1">Rename</button></div></details>';
+  $('#lib-course').innerHTML=h;
 }
 function renderLib(){
-  var all=Object.keys(Lib.docs).map(function(k){return Lib.docs[k]});
-  var q=$('#lib-q').value.trim().toLowerCase(),cat=$('#lib-cat').value,sort=$('#lib-sort').value;
-  var rows=all.filter(function(d){return (!cat||(d.category||'General')===cat)&&(!q||((d.title||'')+' '+(d.category||'')).toLowerCase().indexOf(q)>=0)});
-  var last=function(d){return Math.max(d.updated||0,(d.stats&&d.stats.lastStudyAt)||0)};
-  rows.sort(function(a,b){
-    if(sort==='title')return String(a.title).localeCompare(String(b.title));
-    if(sort==='time')return ((b.stats&&b.stats.totalMs)||0)-((a.stats&&a.stats.totalMs)||0);
-    return last(b)-last(a);
+  if(Lib.course!=null&&!courseLessons(Lib.course).length)Lib.course=null;
+  var inC=Lib.course!=null;
+  $('#lib-top').hidden=inC;$('#lib-course').hidden=!inC;
+  if(inC){renderCourse(Lib.course);return}
+  var names=cats(),q=$('#lib-q').value.trim().toLowerCase(),sort=$('#lib-sort').value;
+  var aggs=names.map(function(n){var g=courseAgg(n);g.name=n;return g}).filter(function(g){return g.ls.length&&(!q||g.name.toLowerCase().indexOf(q)>=0||g.ls.some(function(d){return String(d.title||'').toLowerCase().indexOf(q)>=0}))});
+  aggs.sort(function(a,b){
+    if(sort==='title')return a.name.localeCompare(b.name);
+    if(sort==='time')return b.total-a.total;
+    return b.last-a.last;
   });
-  var ms=0,firsts=[],ret=0;
+  var all=Object.keys(Lib.docs).map(function(k){return Lib.docs[k]}),ms=0,firsts=[],ret=0;
   all.forEach(function(d){var m=lessonMetrics(d);ms+=m.total;if(m.first)firsts.push(m.first.ms);if(m.retained)ret++});
   var sum='';
   if(all.length){
-    sum=all.length+' lesson'+(all.length===1?'':'s')+'. '+fmtMs(ms)+' studied in total.';
-    if(firsts.length)sum+=' Average study time to a first 80% on the assessment: '+fmtMs(firsts.reduce(function(a,b){return a+b},0)/firsts.length)+' across '+firsts.length+' lesson'+(firsts.length===1?'':'s')+'.';
+    var nc=names.filter(function(n){return courseLessons(n).length}).length;
+    sum=nc+' course'+(nc===1?'':'s')+', '+all.length+' lesson'+(all.length===1?'':'s')+'. '+fmtMs(ms)+' studied in total.';
+    if(firsts.length)sum+=' Average study time to a first 80% on an assessment: '+fmtMs(firsts.reduce(function(a,b){return a+b},0)/firsts.length)+' across '+firsts.length+' lesson'+(firsts.length===1?'':'s')+'.';
     if(ret)sum+=' '+ret+' passed a delayed retention check.';
   }
   $('#lib-sum').textContent=sum;
   var h='';
-  rows.forEach(function(d){
-    var m=lessonMetrics(d),n=d.course&&d.course.segments?d.course.segments.length:0;
-    var l1=n+' segments. '+(m.total?fmtMs(m.total)+' studied':'Not studied yet')+(m.sessions?'. '+m.reviews+' review'+(m.reviews===1?'':'s'):'')+(m.last?'. Last studied '+ago(m.last):'');
-    var l2=m.att.length?'Best assessment '+m.best+'%'+(m.first?'. First 80% after '+fmtMs(m.first.ms):'')+(m.retained?'. Retention check passed':''):'';
-    h+='<li class="srow"><div class="s-main"><strong>'+esc(d.title)+'</strong><span class="tag">'+esc(d.category||'General')+'</span><span class="muted small">'+esc(l1)+'</span>'+(l2?'<span class="muted small">'+esc(l2)+'</span>':'')+'</div>'+
-      '<div class="s-act"><button class="btn sm primary" data-open="'+esc(d.id)+'">Open</button><button class="btn sm ghost" data-del="'+esc(d.id)+'">Delete</button></div></li>';
+  aggs.forEach(function(g){
+    var n=g.ls.length;
+    var l1=n+' lesson'+(n===1?'':'s')+'. '+(g.total?fmtMs(g.total)+' studied':'Not studied yet')+(g.last&&g.total?'. Last studied '+ago(g.last):'');
+    var l2=(g.pass?g.pass+' of '+n+' at 80%+ on the assessment':'')+(g.best>=0?(g.pass?'. ':'')+'Course exam best '+g.best+'% over '+g.ex.length+' attempt'+(g.ex.length===1?'':'s'):'');
+    h+='<li class="srow"><div class="s-main"><strong>'+esc(g.name)+'</strong><span class="muted small">'+esc(l1)+'</span>'+(l2?'<span class="muted small">'+esc(l2)+'</span>':'')+'</div>'+
+      '<div class="s-act"><button class="btn sm primary" data-course="'+esc(g.name)+'">Open course</button></div></li>';
   });
-  if(!Lib.docs.sample&&!q&&!cat)h+='<li class="srow"><div class="s-main"><strong>Sample lesson: How Retrieval and Spacing Work</strong><span class="tag">Sample</span><span class="muted small">Built in, 2 segments. Try the audio, quizzes and study data.</span></div><div class="s-act"><button class="btn sm" data-open="sample">Open</button></div></li>';
-  if(!h)h='<li class="srow"><span class="muted">No lessons match.</span></li>';
+  if(!Lib.docs.sample&&!q)h+='<li class="srow"><div class="s-main"><strong>Sample lesson: How Retrieval and Spacing Work</strong><span class="tag">Sample</span><span class="muted small">Built in, 2 segments. Try the audio, quizzes and study data.</span></div><div class="s-act"><button class="btn sm primary" data-open="sample">Open</button></div></li>';
+  if(!h)h='<li class="srow"><span class="muted">No courses match.</span></li>';
   $('#lib-list').innerHTML=h;
 }
 function renderHome(){
@@ -1369,15 +1496,19 @@ function exTab(){
   $('#n-noexam').hidden=!!sampleFn;$('#ex-start').disabled=!sampleFn;
   if(EX){renderEx();return}
   $('#ex-setup').hidden=false;$('#ex-run').hidden=true;$('#ex-result').hidden=true;
-  var sel=$('#xscope'),cur=sel.value;
-  sel.innerHTML='<option value="-1">Whole lesson (comprehensive)</option>'+S.course.segments.map(function(sg,i){return '<option value="'+i+'">Segment '+(i+1)+': '+esc(sg.title)+'</option>'}).join('');
+  var sel=$('#xscope'),cur=sel.value,virt=!!(S.doc&&S.doc.virtual);
+  sel.innerHTML=virt?'<option value="-1">Whole course (every lesson)</option>'+S.course.lessons.map(function(t,i){return '<option value="L'+i+'">Lesson '+(i+1)+': '+esc(t)+'</option>'}).join('')
+    :'<option value="-1">Whole lesson (comprehensive)</option>'+S.course.segments.map(function(sg,i){return '<option value="'+i+'">Segment '+(i+1)+': '+esc(sg.title)+'</option>'}).join('');
   if(cur&&sel.querySelector('option[value="'+cur+'"]'))sel.value=cur;
 }
 function exMaterial(si,extra){
-  var c=S.course,out=['LESSON: '+c.title];
+  var c=S.course,virt=!!(S.doc&&S.doc.virtual),out=[(virt?'COURSE: ':'LESSON: ')+c.title];
+  var inc=c.segments.filter(function(sg,i){return typeof si==='string'?('L'+sg._li===si):(si<0||i===si)});
+  var per=virt?Math.max(700,Math.floor(80000/Math.max(1,inc.length))):0;
   c.segments.forEach(function(sg,i){
-    if(si>=0&&i!==si)return;
-    out.push('\n## Segment '+(i+1)+': '+sg.title+'\n'+sg.narration+'\nKey points: '+(sg.key_points||[]).join('; '));
+    if(inc.indexOf(sg)<0)return;
+    var nar=per?String(sg.narration).slice(0,per):sg.narration;
+    out.push('\n## '+(virt?'Lesson: '+sg._lt+'. ':'')+'Segment '+(i+1)+': '+sg.title+'\n'+nar+'\nKey points: '+(sg.key_points||[]).join('; '));
     var v=sg.visual;
     if(v){
       if(v.type==='table')out.push('Table '+v.title+': '+v.columns.join(' | ')+'\n'+v.rows.map(function(r){return r.join(' | ')}).join('\n'));
@@ -1443,8 +1574,8 @@ async function startExam(){
   await capsReady;
   if(!sampleFn){msg('Writing exam questions needs this page to run inside Claude.');return}
   var count=parseInt(($('input[name=xn]:checked')||{}).value,10)||20,mix=($('input[name=xm]:checked')||{}).value||'m',
-      blind=$('#xblind').checked,si=parseInt($('#xscope').value,10),extra=$('#xextra').value.trim();
-  var mat=exMaterial(isNaN(si)?-1:si,extra);
+      blind=$('#xblind').checked,sv=$('#xscope').value,si=/^L\d+$/.test(sv)?sv:parseInt(sv,10),extra=$('#xextra').value.trim();
+  var mat=exMaterial((typeof si==='string'||!isNaN(si))?si:-1,extra);
   var E=EX={count:count,qs:[],i:0,ans:[],done:false,genDone:false,err:'',ctl:new AbortController(),mix:mix,blind:blind,mat:mat,sc:si};
   $('#ex-setup').hidden=true;renderEx();
   var tries=0,maxTries=Math.ceil(count/5)+3;
@@ -1880,6 +2011,12 @@ document.addEventListener('click',function(e){
   if(t.dataset.retake)return retakeScope(t.dataset.retake);
   if(t.dataset.xi!==undefined)return exAnswer(+t.dataset.xi);
   if(t.dataset.prdel!==undefined){S.doc.pron.splice(+t.dataset.prdel,1);touch(false,true);return renderPron()}
+  if(t.dataset.course!==undefined){Lib.course=t.dataset.course;renderLib();window.scrollTo(0,0);return}
+  if(t.dataset.cback){Lib.course=null;renderLib();window.scrollTo(0,0);return}
+  if(t.dataset.cadd){$('#cat').value=Lib.course||'';Lib.home='new';renderHome();window.scrollTo(0,0);return}
+  if(t.dataset.cexam)return openCourseExam(Lib.course);
+  if(t.dataset.cmove){var cp=t.dataset.cmove,ci=cp.indexOf(':');return courseMove(cp.slice(ci+1),cp.slice(0,ci)==='u'?-1:1)}
+  if(t.dataset.cren)return renameCourse(Lib.course,$('#c-ren').value);
   if(t.dataset.open)return openFromLib(t.dataset.open);
   if(t.dataset.del){
     if(t.dataset.armed){return deleteLesson(t.dataset.del)}
@@ -1917,10 +2054,10 @@ document.addEventListener('click',function(e){
     case 'pr-test':return testPron();
     case 'x-json':return doExport('json');
     case 'x-csv':return saveFile(slug(S.course.title)+'-study-data.csv',toCsv([S.doc]));
-    case 'x-csv-all':{var all=Object.keys(Lib.docs).map(function(k){return Lib.docs[k]});if(!all.length){msg('No lessons in your library yet.');return}return saveFile('study-coach-data.csv',toCsv(all))}
+    case 'x-csv-all':{var all=Object.keys(Lib.docs).map(function(k){return Lib.docs[k]});if(!all.length){msg('No lessons in your library yet.');return}return saveFile('study-coach-data.csv',toCsv(all.concat(Object.keys(Lib.recs).map(function(k){return Lib.recs[k]}))))}
   }
 });
-document.addEventListener('change',function(e){if(e.target&&e.target.name==='um')updTab()});
+document.addEventListener('change',function(e){var t=e.target;if(t&&t.name==='um')updTab();if(t&&t.dataset&&t.dataset.mv&&t.value)moveLesson(t.dataset.mv,t.value)});
 $('#ufile').addEventListener('change',function(e){var fl=Array.prototype.slice.call(e.target.files);e.target.value='';loadFiles(fl,{ta:'#u-src',note:'#u-fnote'})});
 $('#file').addEventListener('change',function(e){var fl=Array.prototype.slice.call(e.target.files);e.target.value='';loadFiles(fl)});
 function bindSettings(){
@@ -1947,7 +2084,7 @@ window.addEventListener('scroll',bump,{passive:true});
 setInterval(tick,5000);
 document.addEventListener('visibilitychange',function(){tick();if(document.hidden)flushSave()});
 window.addEventListener('pagehide',function(){tick();flushSave()});
-$('#lib-q').addEventListener('input',renderLib);$('#lib-cat').addEventListener('change',renderLib);$('#lib-sort').addEventListener('change',renderLib);
+$('#lib-q').addEventListener('input',renderLib);$('#lib-sort').addEventListener('change',renderLib);
 loadLocalLib();renderHome();view('home');
 capsReady.then(startLibrary);
 })();

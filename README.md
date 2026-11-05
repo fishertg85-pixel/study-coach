@@ -28,3 +28,5 @@ Outside Claude, only audio, quizzes and the study guide for lessons already in t
 - Lessons and study data live in the user's Claude account, not in this repo. Back them up with each lesson's .json download and the study-data .csv download.
 - Browser voices vary by device. Pick a British or other natural voice under Audio settings.
 - Lesson text is written by Claude. Check clinical, legal and exam-critical details against primary sources.
+
+- **Courses**: lessons are grouped into courses (the lesson's course field). A course screen lists its lessons in order (move up/down, move to another course, rename), shows course-level study data, and offers course-wide exam practice drawn from every lesson (attempts are saved in a per-course record).
