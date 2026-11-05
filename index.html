@@ -1004,7 +1004,8 @@ function renderCourse(name){
   if(g.ex.length){
     h+='<ul class="flist">'+g.ex.slice().reverse().slice(0,15).map(function(a){return '<li><span>'+Math.round(a.ok/a.n*100)+'% ('+a.ok+' of '+a.n+')</span><span class="muted">'+fmtDateTime(a.ts)+'</span></li>'}).join('')+'</ul>';
   }else h+='<p class="muted small">No course exams yet. Course exam practice draws questions from every lesson in this course.</p>';
-  h+='<details class="crs-ren"><summary>Rename this course</summary><div class="row"><input id="c-ren" type="text" maxlength="40" value="'+esc(name)+'" aria-label="Course name"><button class="btn" data-cren="1">Rename</button></div></details>';
+  h+='<details class="crs-ren"><summary>Rename this course</summary><div class="row"><input id="c-ren" type="text" maxlength="40" value="'+esc(name)+'" aria-label="Course name"><button class="btn" data-cren="1">Rename</button></div>'+
+    (others.length?'<div class="field" style="margin-top:10px"><label for="c-merge">Merge all of this course\'s lessons into another course</label><select id="c-merge" data-merge="1"><option value="">Choose a course...</option>'+others.map(function(c){return '<option value="'+esc(c)+'">'+esc(c)+'</option>'}).join('')+'</select><span class="muted small">Lessons keep their study data. They are added after the other course\'s lessons, and this course\'s exam history is combined with it.</span></div>':'')+'</details>';
   $('#lib-course').innerHTML=h;
 }
 function renderLib(){
@@ -2289,7 +2290,7 @@ document.addEventListener('click',function(e){
     case 'x-csv-all':{var all=Object.keys(Lib.docs).map(function(k){return Lib.docs[k]});if(!all.length){msg('No lessons in your library yet.');return}return saveFile('study-coach-data.csv',toCsv(all.concat(Object.keys(Lib.recs).map(function(k){return Lib.recs[k]}))))}
   }
 });
-document.addEventListener('change',function(e){var t=e.target;if(t&&t.name==='um')updTab();if(t&&t.dataset&&t.dataset.mv&&t.value)moveLesson(t.dataset.mv,t.value)});
+document.addEventListener('change',function(e){var t=e.target;if(t&&t.name==='um')updTab();if(t&&t.dataset&&t.dataset.mv&&t.value)moveLesson(t.dataset.mv,t.value);if(t&&t.dataset&&t.dataset.merge&&t.value)renameCourse(Lib.course,t.value)});
 $('#cfile').addEventListener('change',function(e){var fl=Array.prototype.slice.call(e.target.files);e.target.value='';loadFiles(fl,{ta:'#c-src',note:'#c-fnote'})});
 $('#ufile').addEventListener('change',function(e){var fl=Array.prototype.slice.call(e.target.files);e.target.value='';loadFiles(fl,{ta:'#u-src',note:'#u-fnote'})});
 $('#file').addEventListener('change',function(e){var fl=Array.prototype.slice.call(e.target.files);e.target.value='';loadFiles(fl)});
