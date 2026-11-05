@@ -266,6 +266,7 @@ details.aset summary{min-height:44px;display:flex;align-items:center;cursor:poin
       <button class="tab on" role="tab" data-tab="contents">Contents</button>
       <button class="tab" role="tab" data-tab="lesson">Lesson</button>
       <button class="tab" role="tab" data-tab="guide">Study guide</button>
+      <button class="tab" role="tab" data-tab="exam">Exam practice</button>
       <button class="tab" role="tab" data-tab="stats">Study data</button>
       <button class="tab" role="tab" data-tab="export">Download</button></div>
     <div id="t-contents" class="panel"></div>
@@ -282,6 +283,27 @@ details.aset summary{min-height:44px;display:flex;align-items:center;cursor:poin
     </div>
     <div id="t-guide" hidden></div>
     <div id="t-stats" class="panel" hidden></div>
+    <div id="t-exam" class="panel" hidden>
+      <div class="seg-head"><h2>Exam practice</h2><p class="muted">Board-style questions written fresh from this lesson each time you start. Scenario questions describe the conditions and never name the answer. Answer order is shuffled every time.</p></div>
+      <p id="n-noexam" class="notice" hidden>Writing exam questions needs this page to run inside Claude.</p>
+      <div id="ex-setup" class="panel">
+        <div class="field"><span class="lbl">Questions</span><div class="chips" role="radiogroup" aria-label="Number of questions">
+          <label class="chip"><input type="radio" name="xn" value="10"><span>10</span></label>
+          <label class="chip"><input type="radio" name="xn" value="20" checked><span>20</span></label>
+          <label class="chip"><input type="radio" name="xn" value="30"><span>30</span></label></div></div>
+        <div class="field"><span class="lbl">Format</span><div class="chips" role="radiogroup" aria-label="Question format">
+          <label class="chip"><input type="radio" name="xm" value="m" checked><span>Mixed: scenario, K-type, single</span></label>
+          <label class="chip"><input type="radio" name="xm" value="k"><span>K-type only</span></label>
+          <label class="chip"><input type="radio" name="xm" value="s"><span>Scenario only</span></label></div></div>
+        <div class="field"><label for="xscope">Cover</label><select id="xscope"></select></div>
+        <div class="field"><label class="chip" style="width:fit-content"><input type="checkbox" id="xblind" checked><span>Do not name the category or answer in the question</span></label></div>
+        <div class="field"><label for="xextra">Extra reference text (optional)</label><textarea id="xextra" rows="3" placeholder="Paste more of your source material here to widen what the questions can draw on."></textarea></div>
+        <div class="row"><button id="ex-start" class="btn primary">Start exam</button></div>
+        <p class="muted small">Questions are written by Claude from this lesson's text and any reference text you add, and each shows the passage it rests on. If the lesson is wrong or silent on a point, the questions can be too. Check details against the current official standard before relying on them.</p>
+      </div>
+      <div id="ex-run" class="panel" hidden></div>
+      <div id="ex-result" class="panel" hidden></div>
+    </div>
     <div id="t-export" class="panel" hidden>
       <div class="seg-head"><h2>Take it with you</h2><p class="muted">Each file is built from the lesson on screen.</p></div>
       <p id="n-nodl" class="notice" hidden>Saving files is not available in this view.</p>
@@ -430,13 +452,13 @@ function ago(ts){if(!ts)return 'never';var d=Math.floor((Date.now()-ts)/864e5);r
 function newDoc(id,course,progress){
   return {kind:'lesson',id:id,title:course.title,category:course.category||'General',created:Date.now(),updated:Date.now(),course:course,
     progress:progress||{step:0,answers:{}},
-    stats:{totalMs:0,sessionCount:0,firstStudyAt:0,lastStudyAt:0,segMs:{},segPasses:{}},sessions:[],attempts:[],pron:[],_saved:false};
+    stats:{totalMs:0,sessionCount:0,firstStudyAt:0,lastStudyAt:0,segMs:{},segPasses:{}},sessions:[],attempts:[],pron:[],exSeen:[],_saved:false};
 }
 function plain(d,noCourse){
   var a=(d.progress&&d.progress.answers)||{};
   var o={kind:'lesson',id:d.id,title:d.title,category:d.category,created:d.created,updated:d.updated,
     progress:{step:(d.progress&&d.progress.step)||0,answers:Object.keys(a).map(function(k){return [k,a[k]]})},
-    stats:d.stats,sessions:d.sessions,attempts:d.attempts,pron:d.pron||[]};
+    stats:d.stats,sessions:d.sessions,attempts:d.attempts,pron:d.pron||[],exSeen:d.exSeen||[]};
   if(!noCourse)o.course=d.course;
   return clone(o);
 }
@@ -446,7 +468,7 @@ function normDoc(x){
   d.progress={step:(d.progress&&d.progress.step)||0,answers:ao};
   d.stats=Object.assign({totalMs:0,sessionCount:0,firstStudyAt:0,lastStudyAt:0},d.stats||{});
   d.stats.segMs=d.stats.segMs||{};d.stats.segPasses=d.stats.segPasses||{};
-  d.sessions=d.sessions||[];d.attempts=d.attempts||[];d.pron=Array.isArray(d.pron)?d.pron:[];d.category=d.category||'General';d._saved=true;
+  d.sessions=d.sessions||[];d.attempts=d.attempts||[];d.pron=Array.isArray(d.pron)?d.pron:[];d.exSeen=Array.isArray(d.exSeen)?d.exSeen:[];d.category=d.category||'General';d._saved=true;
   return d;
 }
 function localDocs(){
@@ -572,6 +594,7 @@ async function deleteLesson(id){
   renderHome();
 }
 function openDoc(d){
+  exReset();
   tick();stopAudio();flushSave();
   S.doc=d;S.id=d.id;S.course=d.course;S.answers=d.progress.answers;S.revealed={};S.nowQ=null;S.attemptDone={};
   var c=d.course;
@@ -654,11 +677,11 @@ function tick(){
   if(!S.doc||!S.course||d<=0||$('#v-course').hidden)return;
   var c=0;
   if(S.playing&&S.tab==='lesson'&&now-T.speech<=60000)c=Math.min(d,70000);
-  else if(!document.hidden&&(S.tab==='lesson'||S.tab==='guide')&&now-T.act<=60000)c=Math.min(d,5000);
+  else if(!document.hidden&&(S.tab==='lesson'||S.tab==='guide'||S.tab==='exam')&&now-T.act<=60000)c=Math.min(d,5000);
   if(c>0)credit(c,now);
 }
 function credit(ms,now){
-  var d=S.doc,st=d.stats,key=S.tab==='guide'?'g':String(S.step);
+  var d=S.doc,st=d.stats,key=S.tab==='guide'?'g':S.tab==='exam'?'x':String(S.step);
   var cur=d.sessions[d.sessions.length-1];
   if(!cur||now-cur.e>1800000){
     var prevE=cur?cur.e:0,start=now-ms;
@@ -676,8 +699,8 @@ function credit(ms,now){
 function recordAttempt(scope,n,ok){
   var d=S.doc,cur=d.sessions[d.sessions.length-1],cold=true;
   if(cur)Object.keys(cur.seg||{}).forEach(function(k){
-    if(k==='g'||cur.seg[k]<20000)return;
-    if(scope==='a'){if(+k<S.course.segments.length)cold=false}
+    if(k==='g'||k==='x'||cur.seg[k]<20000)return;
+    if(scope==='a'||scope==='x'){if(+k<S.course.segments.length)cold=false}
     else if('s'+k===scope)cold=false;
   });
   d.attempts.push({ts:Date.now(),scope:scope,n:n,ok:ok,ms:d.stats.totalMs||0,sc:d.stats.sessionCount||0,g:cur&&cur.g!=null?cur.g:null,cold:cold});
@@ -756,7 +779,7 @@ function renderStats(){
   h+='<div><h3>By segment</h3><div class="vt-wrap"><table class="vtable"><thead><tr><th>Segment</th><th>Time</th><th>Passes</th><th>Last check</th></tr></thead><tbody>'+rows+'</tbody></table></div><p class="muted small">A pass is a session with at least 20 seconds on that segment.</p></div>';
   if(d.attempts.length){
     var ar=d.attempts.slice(-30).reverse().map(function(a){
-      return '<tr><td>'+fmtDateTime(a.ts)+'</td><td>'+(a.scope==='a'?'Assessment':'Segment '+(parseInt(a.scope.slice(1),10)+1)+' check')+'</td><td>'+Math.round(a.ok/a.n*100)+'% ('+a.ok+'/'+a.n+')</td><td>'+fmtMs(a.ms)+'</td><td>'+(a.g==null?'-':a.g<1?'under 1 h':Math.round(a.g)+' h')+'</td><td>'+(a.cold?'No replay first':'After replay')+'</td></tr>';
+      return '<tr><td>'+fmtDateTime(a.ts)+'</td><td>'+(a.scope==='a'?'Assessment':a.scope==='x'?'Exam practice':'Segment '+(parseInt(a.scope.slice(1),10)+1)+' check')+'</td><td>'+Math.round(a.ok/a.n*100)+'% ('+a.ok+'/'+a.n+')</td><td>'+fmtMs(a.ms)+'</td><td>'+(a.g==null?'-':a.g<1?'under 1 h':Math.round(a.g)+' h')+'</td><td>'+(a.cold?'No replay first':'After replay')+'</td></tr>';
     }).join('');
     h+='<div><h3>Quiz attempts</h3><div class="vt-wrap"><table class="vtable"><thead><tr><th>When</th><th>Test</th><th>Score</th><th>Study before</th><th>Away</th><th>Taken</th></tr></thead><tbody>'+ar+'</tbody></table></div></div>';
   }
@@ -774,7 +797,7 @@ function toCsv(docs){
   docs.forEach(function(d){
     var cat=d.category||'General';
     (d.sessions||[]).forEach(function(s){L.push([d.title,cat,'session',new Date(s.s).toISOString(),(s.ms/60000).toFixed(2),'','','','','','',s.g==null?'':s.g,''].map(csvCell).join(','))});
-    (d.attempts||[]).forEach(function(a){L.push([d.title,cat,'attempt',new Date(a.ts).toISOString(),'',a.scope==='a'?'assessment':'segment '+(parseInt(a.scope.slice(1),10)+1),Math.round(a.ok/a.n*100),a.ok,a.n,(a.ms/60000).toFixed(2),a.sc,a.g==null?'':a.g,a.cold?'yes':'no'].map(csvCell).join(','))});
+    (d.attempts||[]).forEach(function(a){L.push([d.title,cat,'attempt',new Date(a.ts).toISOString(),'',a.scope==='a'?'assessment':a.scope==='x'?'exam practice':'segment '+(parseInt(a.scope.slice(1),10)+1),Math.round(a.ok/a.n*100),a.ok,a.n,(a.ms/60000).toFixed(2),a.sc,a.g==null?'':a.g,a.cold?'yes':'no'].map(csvCell).join(','))});
   });
   return L.join('\n');
 }
@@ -1309,6 +1332,183 @@ function testPron(){
   if(!say){msg('Type how it sounds first.');return}
   stopAudio();if(useNatural())nvUnlock();speak(say);
 }
+/* ---------- exam practice (fresh board-style questions, K-type and blind scenarios) ---------- */
+var ROM=['I','II','III','IV','V'];
+var EX=null;
+function exReset(){if(EX&&EX.ctl){try{EX.ctl.abort()}catch(e){}}EX=null;
+  var a=$('#ex-setup'),b=$('#ex-run'),c=$('#ex-result');if(a){a.hidden=false;b.hidden=true;c.hidden=true}}
+function exTab(){
+  if(!S.course)return;
+  $('#n-noexam').hidden=!!sampleFn;$('#ex-start').disabled=!sampleFn;
+  if(EX){renderEx();return}
+  $('#ex-setup').hidden=false;$('#ex-run').hidden=true;$('#ex-result').hidden=true;
+  var sel=$('#xscope'),cur=sel.value;
+  sel.innerHTML='<option value="-1">Whole lesson (comprehensive)</option>'+S.course.segments.map(function(sg,i){return '<option value="'+i+'">Segment '+(i+1)+': '+esc(sg.title)+'</option>'}).join('');
+  if(cur&&sel.querySelector('option[value="'+cur+'"]'))sel.value=cur;
+}
+function exMaterial(si,extra){
+  var c=S.course,out=['LESSON: '+c.title];
+  c.segments.forEach(function(sg,i){
+    if(si>=0&&i!==si)return;
+    out.push('\n## Segment '+(i+1)+': '+sg.title+'\n'+sg.narration+'\nKey points: '+(sg.key_points||[]).join('; '));
+    var v=sg.visual;
+    if(v){
+      if(v.type==='table')out.push('Table '+v.title+': '+v.columns.join(' | ')+'\n'+v.rows.map(function(r){return r.join(' | ')}).join('\n'));
+      else if(v.type==='flow')out.push('Process '+v.title+': '+v.steps.join(' > '));
+      else if(v.type==='concepts')out.push('Terms: '+v.items.map(function(x){return x.term+' = '+x.def}).join('; '));
+    }
+  });
+  if(extra)out.push('\n## Additional reference text\n'+extra);
+  return out.join('\n').slice(0,90000);
+}
+function exPrompt(mat,k,mix,blind,seed,seen){
+  var comp=mix==='k'?'All '+k+' items are ktype.':mix==='s'?'All '+k+' items are scenario.':'Mix the '+k+' items: about 40% scenario, 40% ktype, 20% single.';
+  return 'You write board-certification exam items, in the style of a professional certification exam, from the MATERIAL below.\n\nRULES\n'+
+  '- Use only facts stated in the MATERIAL. If it does not support a fact, do not use that fact. Never invent numbers, limits, times or categories.\n- '+comp+'\n'+
+  '- scenario: the stem describes conditions and facts from the material (for example setting, components, process, testing, storage) and asks the examinee to determine the classification, limit, requirement or method that follows from them. '+
+  (blind?'The stem must NOT state or hint the name of the classification, category, method or limit being asked for. Describe the conditions that make it apply, so the examinee has to know which one it is. ':'')+
+  '4 or 5 options, exactly one correct; the distractors are real alternatives from the same material.\n'+
+  '- single: a direct question whose stem describes a procedure or condition without naming it, asking for a parameter or requirement such as a temperature, pressure, time or required test. 4 or 5 options, exactly one correct.\n'+
+  '- ktype: a stem plus 4 statements. Each statement is wholly true or wholly false according to the material. "true" lists the indexes (starting at 0) of the true statements. At least one true and at least one false.\n'+
+  '- Vary the products, settings and numbers you use. Variation seed: '+seed+'.'+(seen.length?' Do not reuse these earlier items: '+seen.join(' || ')+'.':'')+'\n'+
+  '- Never use "all of the above" or "none of the above". Do not give the answer away in the stem.\n'+
+  '- rationale: why the keyed answer is right and why the most tempting wrong choice is wrong. basis: a short phrase (under 200 characters) copied from the MATERIAL that supports the keyed answer.\n'+
+  '- Write in the language of the MATERIAL.\n\nMATERIAL\n<<<\n'+mat+'\n>>>\n\n'+
+  'OUTPUT: only JSON objects, one after another, exactly '+k+' objects, no text outside them and no code fences.\n'+
+  '{"type":"scenario|single|ktype","stem":"","options":["",""],"answer":0,"statements":["",""],"true":[0],"topic":"","rationale":"","basis":""}\n'+
+  'Include options and answer for scenario and single. Include statements and true for ktype.';
+}
+function kLabel(set){var r=set.map(function(i){return ROM[i]});return r.length===1?r[0]+' only':r.slice(0,-1).join(', ')+' and '+r[r.length-1]}
+function kOptions(n,tset){
+  var seen={},out=[];
+  function add(x){x=x.slice().sort(function(a,b){return a-b});if(!x.length)return;var k=x.join(',');if(seen[k])return;seen[k]=1;out.push(x)}
+  add(tset);
+  var cand=[];for(var i=0;i<n;i++)cand.push(tset.indexOf(i)>=0?tset.filter(function(v){return v!==i}):tset.concat([i]));
+  shuffle(cand).forEach(add);
+  var g=0;while(out.length<5&&g++<80){var x=[];for(var j=0;j<n;j++)if(Math.random()<.5)x.push(j);add(x)}
+  out=out.slice(0,5);
+  var key=tset.join(','),sh=shuffle(out.map(function(x){return {x:x,c:x.join(',')===key}}));
+  return {options:sh.map(function(o){return kLabel(o.x)}),answer:sh.findIndex?sh.findIndex(function(o){return o.c}):sh.map(function(o){return o.c}).indexOf(true)};
+}
+function normEx(o){
+  if(!o||typeof o!=='object')return null;
+  var t=String(o.type||'').toLowerCase(),stem=str(o.stem,900);
+  if(!stem)return null;
+  var b={type:t==='ktype'?'ktype':(t==='single'?'single':'scenario'),stem:stem,topic:str(o.topic,80),rationale:str(o.rationale,900),basis:str(o.basis,300)};
+  if(t==='ktype'){
+    var st=(Array.isArray(o.statements)?o.statements:[]).map(function(x){return str(x,400)}).filter(Boolean).slice(0,5);
+    var tr=(Array.isArray(o.true)?o.true:[]).map(function(x){return parseInt(x,10)}).filter(function(x,i,a){return x>=0&&x<st.length&&a.indexOf(x)===i});
+    if(st.length<3||!tr.length||tr.length===st.length)return null;
+    var idx=shuffle(st.map(function(_,i){return i})),ts=[];
+    idx.forEach(function(orig,pos){if(tr.indexOf(orig)>=0)ts.push(pos)});
+    b.statements=idx.map(function(i){return st[i]});
+    var k=kOptions(st.length,ts.sort(function(a,c){return a-c}));b.options=k.options;b.answer=k.answer;
+    return b.answer>=0?b:null;
+  }
+  var opts=(Array.isArray(o.options)?o.options:[]).map(function(x){return str(x,400)}).filter(Boolean).slice(0,6);
+  var a=parseInt(o.answer,10);
+  if(opts.length<3||!(a>=0&&a<opts.length))return null;
+  if(opts.some(function(x){return /\b(all|none) of the above\b/i.test(x)}))return null;
+  var correct=opts[a];opts=shuffle(opts);b.options=opts;b.answer=opts.indexOf(correct);
+  return b;
+}
+async function startExam(){
+  await capsReady;
+  if(!sampleFn){msg('Writing exam questions needs this page to run inside Claude.');return}
+  var count=parseInt(($('input[name=xn]:checked')||{}).value,10)||20,mix=($('input[name=xm]:checked')||{}).value||'m',
+      blind=$('#xblind').checked,si=parseInt($('#xscope').value,10),extra=$('#xextra').value.trim();
+  var mat=exMaterial(isNaN(si)?-1:si,extra);
+  var E=EX={count:count,qs:[],i:0,ans:[],done:false,genDone:false,err:'',ctl:new AbortController(),mix:mix,blind:blind,mat:mat,sc:si};
+  $('#ex-setup').hidden=true;renderEx();
+  var tries=0,maxTries=Math.ceil(count/5)+3;
+  function push(o){
+    var q=normEx(o);if(!q||E.qs.length>=E.count)return;
+    if(E.qs.some(function(x){return x.stem===q.stem}))return;
+    E.qs.push(q);renderEx();
+  }
+  while(EX===E&&E.qs.length<E.count&&tries<maxTries){
+    tries++;
+    var k=Math.min(5,E.count-E.qs.length),pos=0,seen=(S.doc.exSeen||[]).slice(-30).concat(E.qs.map(function(x){return x.stem.slice(0,90)}));
+    var seed=Math.random().toString(36).slice(2,8);
+    try{
+      var res=await sampleFn(exPrompt(E.mat,k,E.mix,E.blind,seed,seen),{signal:E.ctl.signal,cache:false,onText:function(u){var r=extract(u.text,pos);pos=r.next;r.objs.forEach(push)}});
+      var r2=extract(res.text,pos);r2.objs.forEach(push);
+    }catch(e){
+      if(e&&e.text){var r3=extract(e.text,pos);r3.objs.forEach(push)}
+      if(e&&e.code==='cancelled')return;
+      E.err=ERR[e&&e.code]||'The connection dropped.';
+      if(!E.qs.length)break;
+    }
+  }
+  if(EX===E){E.genDone=true;renderEx()}
+}
+function exQHTML(E,i){
+  var q=E.qs[i],a=E.ans[i],h='<div class="q" id="ex-q"><p class="q-text"><span class="q-n">Q'+(i+1)+'</span>'+esc(q.stem)+'</p>';
+  if(q.type==='ktype')h+='<ol class="kst" style="list-style:none;padding:0;display:grid;gap:8px;margin:0 0 12px">'+q.statements.map(function(s2,j){return '<li><b>'+ROM[j]+'.</b> '+esc(s2)+'</li>'}).join('')+'</ol>';
+  h+='<div class="opts" role="group" aria-label="Answer options">';
+  q.options.forEach(function(o,j){
+    var cls='opt';if(a!==undefined){if(j===q.answer)cls+=' correct';else if(j===a)cls+=' wrong'}
+    h+='<button class="'+cls+'" data-xi="'+j+'"'+(a!==undefined?' disabled':'')+'><span class="ltr">'+LTR[j]+'</span><span>'+esc(o)+'</span></button>';
+  });
+  h+='</div>';
+  if(a!==undefined){
+    h+='<div class="fb"><b>'+(a===q.answer?'Correct. ':'Not quite. The answer is '+LTR[q.answer]+'. ')+'</b>'+esc(q.rationale)+
+       (q.basis?'<br><span class="muted small">From your material: "'+esc(q.basis)+'"</span>':'')+'</div>';
+  }
+  return h+'</div>';
+}
+function renderEx(){
+  var E=EX;if(!E)return;
+  $('#ex-setup').hidden=true;$('#ex-run').hidden=!!E.done;$('#ex-result').hidden=!E.done;
+  if(E.done){renderExResult();return}
+  var i=E.i,q=E.qs[i],h='<p class="muted small">Question '+(i+1)+' of '+E.count+(E.genDone?'':' · more are being written')+'</p>';
+  if(!q){
+    h+=E.genDone?'<p class="notice">'+(E.qs.length?'Only '+E.qs.length+' questions could be written.':'No questions could be written. '+esc(E.err||'Try again, or add reference text.'))+'</p><div class="row">'+(E.qs.length?'<button class="btn primary" id="ex-finish">See results</button>':'')+'<button class="btn" id="ex-exit">Back</button></div>'
+      :'<p class="muted">Writing the next question...</p><div class="row"><button class="btn" id="ex-exit">Cancel</button></div>';
+    $('#ex-run').innerHTML=h;return;
+  }
+  h+=exQHTML(E,i);
+  if(E.ans[i]!==undefined){
+    var last=(i+1>=E.count)||(E.genDone&&i+1>=E.qs.length);
+    h+='<div class="row">'+(last?'<button class="btn primary" id="ex-finish">See results</button>':'<button class="btn primary" id="ex-next">Next question</button>')+'</div>';
+  }else if(E.ans.length){h+='<div class="row"><button class="btn sm" id="ex-finish">End exam now</button></div>'}
+  $('#ex-run').innerHTML=h;
+}
+function exAnswer(j){
+  var E=EX;if(!E||E.ans[E.i]!==undefined)return;
+  bump();E.ans[E.i]=j;renderEx();
+}
+function exNext(){var E=EX;if(!E)return;E.i++;renderEx();window.scrollTo(0,0)}
+function exFinish(){
+  var E=EX;if(!E)return;
+  E.done=true;
+  var n=0,ok=0;E.qs.forEach(function(q,i){if(E.ans[i]!==undefined){n++;if(E.ans[i]===q.answer)ok++}});
+  E.n=n;E.ok=ok;
+  if(n){
+    recordAttempt('x',n,ok);
+    var ex=S.doc.exSeen=(S.doc.exSeen||[]).concat(E.qs.slice(0,E.i+1).map(function(q){return q.stem.slice(0,90)})).slice(-60);
+    touch(false,true);
+  }
+  try{E.ctl.abort()}catch(e){}
+  renderEx();
+}
+function renderExResult(){
+  var E=EX,pct=E.n?Math.round(E.ok/E.n*100):0,h='<div class="seg-head"><h2>Exam results</h2></div>';
+  h+='<dl class="kv"><div><dt>Score</dt><dd>'+pct+'%</dd></div><div><dt>Correct</dt><dd>'+E.ok+' of '+E.n+'</dd></div></dl>';
+  var miss=[];E.qs.forEach(function(q,i){if(E.ans[i]!==undefined&&E.ans[i]!==q.answer)miss.push({q:q,i:i})});
+  if(miss.length){
+    var topics={};miss.forEach(function(m){var t=m.q.topic||'General';topics[t]=(topics[t]||0)+1});
+    h+='<div><h3>Topics to review</h3><p>'+Object.keys(topics).map(function(t){return esc(t)+' ('+topics[t]+')'}).join(', ')+'</p></div>';
+    h+='<div><h3>Missed questions</h3>'+miss.map(function(m){
+      var q=m.q;
+      return '<div class="q"><p class="q-text"><span class="q-n">Q'+(m.i+1)+'</span>'+esc(q.stem)+'</p>'+
+        (q.type==='ktype'?'<ol style="list-style:none;padding:0;margin:0 0 8px">'+q.statements.map(function(s2,j){return '<li><b>'+ROM[j]+'.</b> '+esc(s2)+'</li>'}).join('')+'</ol>':'')+
+        '<div class="fb"><b>You chose '+esc(q.options[E.ans[m.i]])+'. Correct: '+esc(q.options[q.answer])+'. </b>'+esc(q.rationale)+(q.basis?'<br><span class="muted small">From your material: "'+esc(q.basis)+'"</span>':'')+'</div></div>';
+    }).join('')+'</div>';
+  }else if(E.n){h+='<p>No missed questions.</p>'}
+  h+='<div class="row"><button class="btn primary" id="ex-new">Start a new exam</button></div><p class="muted small">Every new exam is written fresh, so the questions and answer order will differ. This attempt is saved under Study data.</p>';
+  $('#ex-result').innerHTML=h;
+}
 function think(ms,tok){
   return new Promise(function(res){
     var end=Date.now()+ms;
@@ -1378,7 +1578,7 @@ function setTab(t){
   S.tab=t;
   $$('#v-course .tab').forEach(function(b){b.classList.toggle('on',b.dataset.tab===t);b.setAttribute('aria-selected',b.dataset.tab===t)});
   $('#t-contents').hidden=t!=='contents';if(t==='contents'&&S.course)renderContents();
-  $('#t-lesson').hidden=t!=='lesson';$('#t-guide').hidden=t!=='guide';$('#t-stats').hidden=t!=='stats';if(t==='stats'&&S.doc)renderStats();$('#t-export').hidden=t!=='export';
+  $('#t-lesson').hidden=t!=='lesson';$('#t-guide').hidden=t!=='guide';$('#t-exam').hidden=t!=='exam';if(t==='exam')exTab();$('#t-stats').hidden=t!=='stats';if(t==='stats'&&S.doc)renderStats();$('#t-export').hidden=t!=='export';
   $('#bar').hidden=!(t==='lesson'&&!$('#v-course').hidden);
 }
 
@@ -1509,6 +1709,7 @@ document.addEventListener('click',function(e){
   bump();
   if(t.dataset.home){Lib.home=t.dataset.home;renderHome();return}
   if(t.dataset.retake)return retakeScope(t.dataset.retake);
+  if(t.dataset.xi!==undefined)return exAnswer(+t.dataset.xi);
   if(t.dataset.prdel!==undefined){S.doc.pron.splice(+t.dataset.prdel,1);touch(false,true);return renderPron()}
   if(t.dataset.open)return openFromLib(t.dataset.open);
   if(t.dataset.del){
@@ -1524,7 +1725,7 @@ document.addEventListener('click',function(e){
   switch(t.id){
     case 'build':return build();
     case 'g-stop':if(S.gen){S.gen.stopped=true;S.gen.ctl.abort()}return;
-    case 'btn-home':stopAudio();persist();flushSave();Lib.home='lib';renderHome();view('home');return;
+    case 'btn-home':exReset();stopAudio();persist();flushSave();Lib.home='lib';renderHome();view('home');return;
     case 'b-play':if(S.playing){stopAudio('Paused')}else startPlay();return;
     case 'b-prev':return navTo(S.step-1);
     case 'b-next':return navTo(S.step+1);
@@ -1534,6 +1735,11 @@ document.addEventListener('click',function(e){
     case 'x-pptx':return doExport('pptx');
     case 'x-md':return doExport('md');
     case 'x-html':return doExport('html');
+    case 'ex-start':return startExam();
+    case 'ex-next':return exNext();
+    case 'ex-finish':return exFinish();
+    case 'ex-exit':exReset();return exTab();
+    case 'ex-new':exReset();return exTab();
     case 'pr-add':return addPron();
     case 'pr-test':return testPron();
     case 'x-json':return doExport('json');
