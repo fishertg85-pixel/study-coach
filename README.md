@@ -10,6 +10,7 @@ A single-file web app that builds study lessons from a topic or uploaded documen
 - Library with categories, search and sort, synced per user.
 - Study data: time per lesson and segment, sessions and reviews, quiz attempts, delayed retention check, CSV export.
 - Optional natural voice: Kokoro-82M (Apache-2.0) via kokoro-js, run in the browser; British and American female voices. Falls back to the device voice if the model cannot load.
+- Add material: add new segments from pasted or uploaded material, or revise one segment, with undo and an update history.
 - Exam practice: board-style questions written fresh from a lesson each time (K-type, scenario questions that do not name the answer, single best answer), with shuffled answer order, rationales and the source passage.
 - Downloads: PowerPoint, study guide (.md, .html), lesson file (.json).
 

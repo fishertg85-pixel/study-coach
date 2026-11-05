@@ -266,6 +266,7 @@ details.aset summary{min-height:44px;display:flex;align-items:center;cursor:poin
       <button class="tab on" role="tab" data-tab="contents">Contents</button>
       <button class="tab" role="tab" data-tab="lesson">Lesson</button>
       <button class="tab" role="tab" data-tab="guide">Study guide</button>
+      <button class="tab" role="tab" data-tab="update">Add material</button>
       <button class="tab" role="tab" data-tab="exam">Exam practice</button>
       <button class="tab" role="tab" data-tab="stats">Study data</button>
       <button class="tab" role="tab" data-tab="export">Download</button></div>
@@ -283,6 +284,29 @@ details.aset summary{min-height:44px;display:flex;align-items:center;cursor:poin
     </div>
     <div id="t-guide" hidden></div>
     <div id="t-stats" class="panel" hidden></div>
+    <div id="t-update" class="panel" hidden>
+      <div class="seg-head"><h2>Add or revise material</h2><p class="muted">Add new source material to this lesson, or rewrite one segment. Your existing segments, answers and study data are kept.</p></div>
+      <p id="n-noupd" class="notice" hidden>Updating a lesson needs this page to run inside Claude.</p>
+      <div class="field"><span class="lbl">What do you want to do?</span><div class="chips" role="radiogroup" aria-label="Update type">
+        <label class="chip"><input type="radio" name="um" value="add" checked><span>Add new segments</span></label>
+        <label class="chip"><input type="radio" name="um" value="rev"><span>Revise one segment</span></label></div></div>
+      <div class="field" id="u-revpick" hidden><label for="u-seg">Segment to revise</label><select id="u-seg"></select></div>
+      <div class="field"><label for="u-note" id="u-note-l">What should the new segments cover? (optional)</label>
+        <textarea id="u-note" rows="2" placeholder="e.g. Focus on the beyond-use date limits and the testing each one requires."></textarea></div>
+      <div class="field"><label for="u-src">New material: paste text, or upload files</label>
+        <textarea id="u-src" rows="6" placeholder="Paste notes, a guideline excerpt, slides or a study guide. The new content stays within what is here and the existing lesson."></textarea>
+        <div class="row"><label class="btn sm" for="ufile" style="cursor:pointer">Upload documents</label>
+          <input id="ufile" type="file" multiple accept=".pdf,.docx,.pptx,.txt,.md,.csv,.html,.htm" hidden>
+          <span id="u-fnote" class="muted small" aria-live="polite">PDF, Word, PowerPoint, text or Markdown.</span></div></div>
+      <div class="field" id="u-count"><span class="lbl">New segments</span><div class="chips" role="radiogroup" aria-label="Number of new segments">
+        <label class="chip"><input type="radio" name="un" value="1"><span>1</span></label>
+        <label class="chip"><input type="radio" name="un" value="2" checked><span>2</span></label>
+        <label class="chip"><input type="radio" name="un" value="3"><span>3</span></label>
+        <label class="chip"><input type="radio" name="un" value="4"><span>4</span></label></div></div>
+      <div class="row"><button id="u-run" class="btn primary">Add to lesson</button><button id="u-cancel" class="btn" hidden>Cancel</button><button id="u-undo" class="btn" hidden>Undo last change</button></div>
+      <p id="u-status" class="muted small" aria-live="polite"></p>
+      <div id="u-log"></div>
+    </div>
     <div id="t-exam" class="panel" hidden>
       <div class="seg-head"><h2>Exam practice</h2><p class="muted">Board-style questions written fresh from this lesson each time you start. Scenario questions describe the conditions and never name the answer. Answer order is shuffled every time.</p></div>
       <p id="n-noexam" class="notice" hidden>Writing exam questions needs this page to run inside Claude.</p>
@@ -594,7 +618,7 @@ async function deleteLesson(id){
   renderHome();
 }
 function openDoc(d){
-  exReset();
+  exReset();updReset();
   tick();stopAudio();flushSave();
   S.doc=d;S.id=d.id;S.course=d.course;S.answers=d.progress.answers;S.revealed={};S.nowQ=null;S.attemptDone={};
   var c=d.course;
@@ -1509,6 +1533,105 @@ function renderExResult(){
   h+='<div class="row"><button class="btn primary" id="ex-new">Start a new exam</button></div><p class="muted small">Every new exam is written fresh, so the questions and answer order will differ. This attempt is saved under Study data.</p>';
   $('#ex-result').innerHTML=h;
 }
+/* ---------- add material / revise a segment ---------- */
+var U={ctl:null,prev:null,busy:false};
+function updReset(){if(U.ctl){try{U.ctl.abort()}catch(e){}}U.ctl=null;U.prev=null;U.busy=false;
+  var b=$('#u-run');if(b){b.disabled=false;$('#u-cancel').hidden=true;$('#u-undo').hidden=true;$('#u-status').textContent=''}}
+function updMode(){return ($('input[name=um]:checked')||{}).value||'add'}
+function updTab(){
+  if(!S.course)return;
+  $('#n-noupd').hidden=!!sampleFn;
+  var m=updMode(),sel=$('#u-seg'),cur=sel.value;
+  sel.innerHTML=S.course.segments.map(function(sg,i){return '<option value="'+i+'">Segment '+(i+1)+': '+esc(sg.title)+'</option>'}).join('');
+  if(cur&&sel.querySelector('option[value="'+cur+'"]'))sel.value=cur;
+  $('#u-revpick').hidden=m!=='rev';$('#u-count').hidden=m!=='add';
+  $('#u-note-l').textContent=m==='add'?'What should the new segments cover? (optional)':'What should change? (optional if you paste new material)';
+  $('#u-run').textContent=m==='add'?'Add to lesson':'Revise segment';
+  $('#u-run').disabled=!sampleFn||U.busy;
+  $('#u-undo').hidden=!U.prev||U.busy;
+  var log=(S.course.log||[]).slice().reverse();
+  $('#u-log').innerHTML=log.length?'<h3>Update history</h3><ul class="flist">'+log.map(function(l){return '<li><span>'+esc(l.text)+'</span><span class="muted">'+fmtDateTime(l.ts)+'</span></li>'}).join('')+'</ul>':'';
+}
+function updPrompt(mode,c,src,note,n,idx){
+  var cut=src.length>100000;if(cut)src=src.slice(0,100000);
+  var outline=c.segments.map(function(sg,i){return (i+1)+'. '+sg.title+': '+(sg.key_points||[]).join('; ')}).join('\n');
+  var rules='\nCONTENT RULES (evidence standard)\n- State only what the NEW MATERIAL, the existing lesson and established guidelines support. Name the source domain when stating a finding. Never invent citations, numbers, doses, dates or quotations. If unsure, leave it out.\n- Give every segment an evidence rating: High, Moderate, Low or Insufficient, with one sentence saying why.\n- No moralizing, no filler, no opinion.\n'+
+   'AUDIO RULES\n- narration is written to be heard: short sentences, no lists, no markdown or symbols, no abbreviations such as e.g. or i.e., spell out terms on first use, write numbers the way they are spoken. 140 to 200 words per segment.\n'+
+   'QUIZ RULES\n- 2 questions per segment, 4 options each, exactly one correct, plausible distractors, never "all of the above" or "none of the above". The rationale says why the answer is right and why the most tempting wrong option is wrong.\n'+
+   'LANGUAGE: write in the language of the existing lesson ('+(c.lang||'en-US')+').\n';
+  var fmt='{"kind":"segment","title":"","narration":"","key_points":["3 to 5 short points"],"visual":{"type":"flow|table|concepts","title":"","steps":["3 to 7 short steps"],"columns":["2 to 5"],"rows":[["..."]],"items":[{"term":"","def":""}]},"evidence":{"level":"High","note":""},"quiz":[{"q":"","options":["","","",""],"answer":0,"rationale":""}]}\n';
+  var ctx='You are updating an existing audio-first study lesson.\nLESSON: '+c.title+'\nLEVEL: '+(c.level||'Professional')+'\nEXISTING SEGMENTS:\n'+outline+'\n';
+  var mat=(src?'\nNEW MATERIAL (the learner\'s own'+(cut?', truncated':'')+'). Base the work on this.\n<<<\n'+src+'\n>>>\n':'')+(note?'\nLEARNER INSTRUCTION: '+note+'\n':'');
+  if(mode==='add')
+    return ctx+mat+'\nTASK: write exactly '+n+' NEW segments that continue the lesson. Cover what the new material adds. Do not repeat what the existing segments already teach. Then write one assessment object with '+Math.min(8,n*2)+' to '+Math.min(10,n*3)+' final-assessment questions about the NEW segments only; "segment" is the 0-based index in the whole lesson, so the new segments are indexes '+c.segments.length+' to '+(c.segments.length+n-1)+'.\n'+rules+
+      '\nOUTPUT: only JSON objects, one after another, no text outside them and no code fences: '+n+' segment objects, then one assessment object.\n'+fmt+'{"kind":"assessment","items":[{"q":"","options":["","","",""],"answer":0,"rationale":"","segment":'+c.segments.length+'}]}';
+  var cur=c.segments[idx];
+  return ctx+'\nSEGMENT TO REVISE (number '+(idx+1)+'):\nTitle: '+cur.title+'\nNarration: '+cur.narration+'\nKey points: '+(cur.key_points||[]).join('; ')+'\n'+mat+'\nTASK: rewrite this one segment, applying the learner instruction and the new material. Keep what is still correct and relevant. Then write one assessment object with 1 to 3 final-assessment questions about the revised segment; "segment" is '+idx+'.\n'+rules+
+    '\nOUTPUT: only JSON objects, one after another, no text outside them and no code fences: one segment object, then one assessment object.\n'+fmt+'{"kind":"assessment","items":[{"q":"","options":["","","",""],"answer":0,"rationale":"","segment":'+idx+'}]}';
+}
+function updCancel(){if(U.ctl){try{U.ctl.abort()}catch(e){}}}
+function runUpdate(){
+  if(U.busy||!S.course)return;
+  U.busy=true;
+  return runUpdate2().then(function(){U.busy=false},function(e){U.busy=false;throw e});
+}
+async function runUpdate2(){
+  await capsReady;
+  if(!sampleFn){msg('Updating a lesson needs this page to run inside Claude.');return}
+  var mode=updMode(),src=$('#u-src').value.trim(),note=$('#u-note').value.trim();
+  if(!src&&!note){msg(mode==='add'?'Paste or upload new material, or say what to cover.':'Say what to change, or paste new material.');return}
+  var c=S.course,idx=parseInt($('#u-seg').value,10)||0,n=parseInt(($('input[name=un]:checked')||{}).value,10)||2;
+  if(JSON.stringify(plain(S.doc)).length>225000){msg('This lesson is close to the storage limit. Build a new lesson for the extra material.');return}
+  var snap={course:JSON.stringify(c),answers:JSON.stringify(S.answers)};
+  var ctl=U.ctl=new AbortController();U.busy=true;
+  $('#u-run').disabled=true;$('#u-cancel').hidden=false;$('#u-undo').hidden=true;
+  $('#u-status').textContent=mode==='add'?'Writing '+n+' new segment'+(n===1?'':'s')+'. This usually takes one to two minutes.':'Rewriting segment '+(idx+1)+'...';
+  var segs=[],assess=[],pos=0,err=null;
+  function take(text){var r=extract(text,pos);pos=r.next;r.objs.forEach(function(o){
+    if(o.kind==='segment'||o.narration)segs.push(o);else if(o.kind==='assessment'||o.items)assess=assess.concat(o.items||[]);});
+    if(mode==='add')$('#u-status').textContent='Written '+Math.min(segs.length,n)+' of '+n+' segments...'}
+  try{
+    var res=await sampleFn(updPrompt(mode,c,src,note,n,idx),{signal:ctl.signal,cache:false,onText:function(u){take(u.text)}});
+    take(res.text);
+  }catch(e){err=e;if(e&&e.text)take(e.text)}
+  U.busy=false;U.ctl=null;$('#u-cancel').hidden=true;$('#u-run').disabled=false;
+  if(err&&err.code==='cancelled'){$('#u-status').textContent='Cancelled. The lesson was not changed.';updTab();return}
+  var ns=segs.map(function(o){return normSeg(o,true)}).filter(Boolean);
+  if(mode==='add')ns=ns.slice(0,n);else ns=ns.slice(0,1);
+  if(!ns.length){$('#u-status').textContent=(err&&err.code&&ERR[err.code])||'No usable content came back. Try a smaller piece of material.';updTab();return}
+  var base=c.segments.length,na=assess.map(function(q){return normQ(q,true)}).filter(Boolean);
+  if(mode==='add'){
+    na.forEach(function(q){if(q.segment<base||q.segment>=base+ns.length)q.segment=base+Math.min(ns.length-1,Math.max(0,q.segment-base))});
+    c.segments=c.segments.concat(ns);c.assessment=(c.assessment||[]).concat(na);
+    c.log=(c.log||[]).concat([{ts:Date.now(),text:'Added '+ns.length+' segment'+(ns.length===1?'':'s')+': '+ns.map(function(x){return x.title}).join('; ')}]).slice(-30);
+  }else{
+    var old=c.segments[idx].title;ns[0].title=ns[0].title||old;
+    c.segments[idx]=ns[0];
+    c.assessment=(c.assessment||[]).filter(function(q){return q.segment!==idx}).concat(na.map(function(q){q.segment=idx;return q}));
+    Object.keys(S.answers).forEach(function(k){if(k[0]==='a'||k.indexOf('s'+idx+'q')===0)delete S.answers[k]});
+    delete S.attemptDone['a'];delete S.attemptDone['s'+idx];
+    c.log=(c.log||[]).concat([{ts:Date.now(),text:'Revised segment '+(idx+1)+': '+ns[0].title}]).slice(-30);
+  }
+  if(JSON.stringify(plain(S.doc)).length>250000){
+    S.doc.course=S.course=JSON.parse(snap.course);
+    $('#u-status').textContent='That would pass the lesson storage limit, so nothing was changed. Use less material, or build a new lesson.';updTab();return;
+  }
+  U.prev=snap;
+  touch(true,true);
+  renderSteps();renderContents();renderGuide();setStep(Math.min(S.step,c.segments.length));
+  $('#u-src').value='';$('#u-note').value='';$('#u-fnote').textContent='PDF, Word, PowerPoint, text or Markdown.';
+  $('#u-status').textContent=(mode==='add'?'Added '+ns.length+' segment'+(ns.length===1?'':'s')+(na.length?' and '+na.length+' assessment questions':'')+'. Find '+(ns.length===1?'it':'them')+' in Contents.':'Segment '+(idx+1)+' was rewritten.')+(err&&err.code!=='cancelled'?' The connection ended early, so this may be shorter than requested.':'');
+  updTab();
+}
+function updUndo(){
+  if(!U.prev||!S.doc)return;
+  var cs=JSON.parse(U.prev.course),ans=JSON.parse(U.prev.answers);
+  S.doc.course=S.course=cs;
+  Object.keys(S.answers).forEach(function(k){delete S.answers[k]});Object.assign(S.answers,ans);
+  S.attemptDone={};U.prev=null;
+  touch(true,true);renderSteps();renderContents();renderGuide();setStep(Math.min(S.step,cs.segments.length));
+  $('#u-status').textContent='Reverted to the version before the last change.';updTab();
+}
 function think(ms,tok){
   return new Promise(function(res){
     var end=Date.now()+ms;
@@ -1578,7 +1701,7 @@ function setTab(t){
   S.tab=t;
   $$('#v-course .tab').forEach(function(b){b.classList.toggle('on',b.dataset.tab===t);b.setAttribute('aria-selected',b.dataset.tab===t)});
   $('#t-contents').hidden=t!=='contents';if(t==='contents'&&S.course)renderContents();
-  $('#t-lesson').hidden=t!=='lesson';$('#t-guide').hidden=t!=='guide';$('#t-exam').hidden=t!=='exam';if(t==='exam')exTab();$('#t-stats').hidden=t!=='stats';if(t==='stats'&&S.doc)renderStats();$('#t-export').hidden=t!=='export';
+  $('#t-lesson').hidden=t!=='lesson';$('#t-guide').hidden=t!=='guide';$('#t-update').hidden=t!=='update';if(t==='update')updTab();$('#t-exam').hidden=t!=='exam';if(t==='exam')exTab();$('#t-stats').hidden=t!=='stats';if(t==='stats'&&S.doc)renderStats();$('#t-export').hidden=t!=='export';
   $('#bar').hidden=!(t==='lesson'&&!$('#v-course').hidden);
 }
 
@@ -1667,15 +1790,15 @@ function paintFiles(){
   var n=$('#source').value.length;
   $('#file-note').textContent=n&&loadedFiles.length?(n.toLocaleString()+' characters in the notes box. '+(n>SRC_MAX?'The lesson uses the first '+SRC_MAX.toLocaleString()+'. Trim the box, or build separate lessons from sections.':'You can edit or trim the text before building.')):'';
 }
-async function loadFiles(list){
-  var files=Array.prototype.slice.call(list||[]);
+async function loadFiles(list,tgt){
+  var TG=tgt||{ta:'#source',note:'#file-note'},files=Array.prototype.slice.call(list||[]);
   for(var i=0;i<files.length;i++){
     var f=files[i],ext=((/\.([a-z0-9]+)$/i.exec(f.name)||[])[1]||'').toLowerCase();
-    if(ext==='json'){loadFile(f);continue}
+    if(ext==='json'){if(tgt){msg('Lesson files (.json) can be opened from the library, not added as material.');continue}loadFile(f);continue}
     if(/^(doc|ppt|xls|xlsx)$/.test(ext)){msg(f.name+': this format is not supported. Save it as .docx, .pptx or PDF and upload that.');continue}
     if(!/^(pdf|docx|pptx|txt|md|csv|html|htm)$/.test(ext)){msg(f.name+': unsupported file type. Use PDF, Word (.docx), PowerPoint (.pptx), text or Markdown.');continue}
     if(f.size>25000000){msg(f.name+' is over 25 MB. Upload a smaller copy or paste the part you need.');continue}
-    $('#file-note').textContent='Reading '+f.name+'...';
+    $(TG.note).textContent='Reading '+f.name+'...';
     try{
       var r;
       if(ext==='pdf')r=await extractPdf(await readAs(f,'buf'));
@@ -1684,8 +1807,8 @@ async function loadFiles(list){
       else{var raw=await readAs(f,'text');r={text:/^html?$/.test(ext)?htmlText(raw):raw}}
       var text=r.text.replace(/\u0000/g,'').trim();
       if(text.length<40){msg(f.name+': no readable text found. If it is a scan or image-only PDF, upload a copy with selectable text or paste the text.');continue}
-      var ta=$('#source');ta.value=(ta.value?ta.value+'\n\n':'')+'--- '+f.name+' ---\n'+text;
-      loadedFiles.push({name:f.name,chars:text.length,extra:r.extra||''});
+      var ta=$(TG.ta);ta.value=(ta.value?ta.value+'\n\n':'')+'--- '+f.name+' ---\n'+text;
+      if(tgt)$(TG.note).textContent='Added '+f.name+' ('+text.length.toLocaleString()+' characters).';else loadedFiles.push({name:f.name,chars:text.length,extra:r.extra||''});
     }catch(e){
       var m=e&&e.message,nm=e&&e.name;
       msg(nm==='PasswordException'?f.name+' is password-protected. Remove the password and upload it again.':
@@ -1693,7 +1816,7 @@ async function loadFiles(list){
         'Could not read '+f.name+'. The file may be damaged or not a real '+ext.toUpperCase()+' file.');
     }
   }
-  paintFiles();
+  if(!tgt)paintFiles();
 }
 (function(){
   var drop=$('#drop');
@@ -1725,7 +1848,7 @@ document.addEventListener('click',function(e){
   switch(t.id){
     case 'build':return build();
     case 'g-stop':if(S.gen){S.gen.stopped=true;S.gen.ctl.abort()}return;
-    case 'btn-home':exReset();stopAudio();persist();flushSave();Lib.home='lib';renderHome();view('home');return;
+    case 'btn-home':exReset();updReset();stopAudio();persist();flushSave();Lib.home='lib';renderHome();view('home');return;
     case 'b-play':if(S.playing){stopAudio('Paused')}else startPlay();return;
     case 'b-prev':return navTo(S.step-1);
     case 'b-next':return navTo(S.step+1);
@@ -1735,6 +1858,9 @@ document.addEventListener('click',function(e){
     case 'x-pptx':return doExport('pptx');
     case 'x-md':return doExport('md');
     case 'x-html':return doExport('html');
+    case 'u-run':return runUpdate();
+    case 'u-cancel':return updCancel();
+    case 'u-undo':return updUndo();
     case 'ex-start':return startExam();
     case 'ex-next':return exNext();
     case 'ex-finish':return exFinish();
@@ -1747,6 +1873,8 @@ document.addEventListener('click',function(e){
     case 'x-csv-all':{var all=Object.keys(Lib.docs).map(function(k){return Lib.docs[k]});if(!all.length){msg('No lessons in your library yet.');return}return saveFile('study-coach-data.csv',toCsv(all))}
   }
 });
+document.addEventListener('change',function(e){if(e.target&&e.target.name==='um')updTab()});
+$('#ufile').addEventListener('change',function(e){var fl=Array.prototype.slice.call(e.target.files);e.target.value='';loadFiles(fl,{ta:'#u-src',note:'#u-fnote'})});
 $('#file').addEventListener('change',function(e){var fl=Array.prototype.slice.call(e.target.files);e.target.value='';loadFiles(fl)});
 function bindSettings(){
   $('#s-mode').value=settings.mode;$('#s-think').value=String(settings.think);$('#s-rate').value=String(settings.rate);
