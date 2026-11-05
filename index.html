@@ -217,6 +217,7 @@ details.aset summary{min-height:44px;display:flex;align-items:center;cursor:poin
 
     <div id="h-lib" class="panel">
       <div class="seg-head"><h1 id="lib-h">Your courses</h1><p id="lib-sync" class="muted small"></p></div>
+      <p id="lib-mv" class="notice" hidden></p>
       <div id="lib-top" class="panel">
         <p id="lib-sum" class="sumline muted"></p>
         <div class="libtools">
@@ -492,7 +493,7 @@ var DEMO={meta:{title:'How Retrieval and Spacing Work',lang:'en-US',level:'Found
   {q:'Which statement matches the review by Dunlosky and colleagues?',options:['Practice testing and distributed practice were both rated high utility','Both were rated low utility','Only spacing was rated high utility','Neither technique was reviewed'],answer:0,rationale:'Both practice testing and distributed practice received the high-utility rating in that review.',segment:1}]};
 
 /* ---------- library, sync and study tracking ---------- */
-var Lib={docs:{},recs:{},course:null,cloud:false,sync:'local',home:'lib',migrated:false,timer:null,errAt:0};
+var Lib={docs:{},recs:{},course:null,mvmsg:'',cloud:false,sync:'local',home:'lib',migrated:false,timer:null,errAt:0};
 var UCOL=null,dirty={},dirtyCourse={},saveT=null,saving=false;
 var T={last:Date.now(),act:Date.now(),speech:0};
 function clone(x){return JSON.parse(JSON.stringify(x))}
@@ -583,15 +584,36 @@ function courseMove(id,dir){
   var t=ids[i];ids[i]=ids[j];ids[j]=t;
   var r=recFor(name);r.order=ids;saveRecQ(r);renderLib();
 }
-function moveLesson(id,to){
-  var d=Lib.docs[id];to=String(to||'').trim().slice(0,40);if(!d||!to)return;
-  d.category=to;d.updated=Date.now();if(S.doc&&S.doc.id===id)S.doc.category=to;
-  dirty[id]=d;flushSave();msg('Moved to '+to+'.');renderHome();
+function persistDocs(list){
+  return list.reduce(function(p,d){return p.then(function(){
+    return Promise.race([writeDoc(d,false),new Promise(function(_,rej){setTimeout(function(){rej({code:'timeout'})},15000)})]);
+  })},Promise.resolve());
+}
+function errTxt(e){return (e&&(e.code||e.message))||'unknown error'}
+async function moveLesson(id,to){
+  var d=Lib.docs[id];to=String(to||'').trim().slice(0,40);
+  if(!to)return;
+  if(!d){Lib.mvmsg='Could not find that lesson, so nothing was moved.';renderLib();return}
+  var old=d.category;d.category=to;d.updated=Date.now();if(S.doc&&S.doc.id===id)S.doc.category=to;
+  Lib.mvmsg='Moving...';renderLib();
+  try{await persistDocs([d]);Lib.mvmsg='Moved "'+d.title+'" to '+to+'.'}
+  catch(e){
+    if(e&&e.code==='timeout'){dirty[id]=d;flushSave();Lib.mvmsg='Moved "'+d.title+'" to '+to+' on this screen, but saving is slow. Keep this page open; it keeps trying.'}
+    else{d.category=old;if(S.doc&&S.doc.id===id)S.doc.category=old;Lib.mvmsg='Could not save the move ('+errTxt(e)+'). Nothing was changed.'}
+  }
+  renderHome();
 }
 async function renameCourse(old,nu){
   nu=String(nu||'').trim().slice(0,40);
   if(!nu||nu===old){msg('Type a new name first.');return}
-  courseLessons(old).forEach(function(d){d.category=nu;d.updated=Date.now();dirty[d.id]=d});
+  var mvd=courseLessons(old),oldcat=mvd.map(function(d){return d.category});
+  mvd.forEach(function(d){d.category=nu;d.updated=Date.now()});
+  Lib.mvmsg='Working...';renderLib();
+  try{await persistDocs(mvd)}
+  catch(e){
+    if(e&&e.code==='timeout'){mvd.forEach(function(d){dirty[d.id]=d});flushSave()}
+    else{mvd.forEach(function(d,i){d.category=oldcat[i]});Lib.mvmsg='Could not save the change ('+errTxt(e)+'). Nothing was changed.';renderHome();return}
+  }
   var ok=cslug(old),nk=cslug(nu),r=Lib.recs[ok];
   if(r){
     var t=Lib.recs[nk];
@@ -605,7 +627,7 @@ async function renameCourse(old,nu){
     r.name=nu;r.category=nu;r.title='Course exam: '+nu;r.id='cr-'+nk;
     saveRecQ(r);
   }
-  Lib.course=nu;flushSave();msg('Course renamed to '+nu+'.');renderHome();
+  Lib.course=nu;Lib.mvmsg='Done. '+mvd.length+' lesson'+(mvd.length===1?'':'s')+' now in "'+nu+'".';renderHome();
 }
 /* ----- course integration: fold new material into a course and consolidate its lessons ----- */
 var INT={ctl:null,busy:false,plan:null,name:null,refs:null,ls:null,src:'',note:'',done:{}};
@@ -1011,6 +1033,7 @@ function renderCourse(name){
 function renderLib(){
   if(Lib.course!=null&&!courseLessons(Lib.course).length)Lib.course=null;
   var inC=Lib.course!=null;
+  $('#lib-mv').textContent=Lib.mvmsg||'';$('#lib-mv').hidden=!Lib.mvmsg;
   $('#lib-top').hidden=inC;$('#lib-course').hidden=!inC;$('#lib-integ').hidden=!inC;intSync();
   if(inC){renderCourse(Lib.course);return}
   var names=cats(),q=$('#lib-q').value.trim().toLowerCase(),sort=$('#lib-sort').value;
@@ -2240,8 +2263,8 @@ document.addEventListener('click',function(e){
   if(t.dataset.retake)return retakeScope(t.dataset.retake);
   if(t.dataset.xi!==undefined)return exAnswer(+t.dataset.xi);
   if(t.dataset.prdel!==undefined){S.doc.pron.splice(+t.dataset.prdel,1);touch(false,true);return renderPron()}
-  if(t.dataset.course!==undefined){Lib.course=t.dataset.course;renderLib();window.scrollTo(0,0);return}
-  if(t.dataset.cback){Lib.course=null;renderLib();window.scrollTo(0,0);return}
+  if(t.dataset.course!==undefined){Lib.mvmsg='';Lib.course=t.dataset.course;renderLib();window.scrollTo(0,0);return}
+  if(t.dataset.cback){Lib.mvmsg='';Lib.course=null;renderLib();window.scrollTo(0,0);return}
   if(t.dataset.cadd){$('#cat').value=Lib.course||'';Lib.home='new';renderHome();window.scrollTo(0,0);return}
   if(t.dataset.cexam)return openCourseExam(Lib.course);
   if(t.dataset.cmove){var cp=t.dataset.cmove,ci=cp.indexOf(':');return courseMove(cp.slice(ci+1),cp.slice(0,ci)==='u'?-1:1)}
