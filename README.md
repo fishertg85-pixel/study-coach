@@ -30,3 +30,4 @@ Outside Claude, only audio, quizzes and the study guide for lessons already in t
 - Lesson text is written by Claude. Check clinical, legal and exam-critical details against primary sources.
 
 - **Courses**: lessons are grouped into courses (the lesson's course field). A course screen lists its lessons in order (move up/down, move to another course, rename), shows course-level study data, and offers course-wide exam practice drawn from every lesson (attempts are saved in a per-course record).
+- **Add material and reorganize a course**: on a course screen, paste or upload new material. Claude plans the fewest topic-coherent lessons (new content folded in, overlaps merged, untouched segments kept verbatim), you review the plan, then it writes only the new or rewritten segments. Previous lessons are moved to a "(previous)" course.

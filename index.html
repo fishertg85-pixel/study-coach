@@ -227,6 +227,24 @@ details.aset summary{min-height:44px;display:flex;align-items:center;cursor:poin
         <p class="muted small">A course holds the lessons on one subject. Open a course to see its lessons in order, add to it, or take a course-wide exam. Study time, reviews and quiz attempts are recorded for every lesson and for the course exam.</p>
       </div>
       <div id="lib-course" class="panel" hidden></div>
+      <div id="lib-integ" class="panel" hidden>
+        <details class="aset"><summary>Add material and reorganize this course</summary>
+          <div class="field" style="padding:6px 0 12px;gap:12px">
+            <p class="muted small">Paste or upload new material. Claude reads every lesson in this course together with the new material, then proposes the fewest lessons that hold together by topic. New content is folded in where it fits, overlapping lessons are merged, and segments the new material does not touch are kept word for word. You review the plan before anything is written. Your current lessons are moved into a "(previous)" course, so nothing is lost.</p>
+            <p id="n-noint" class="notice" hidden>Reorganizing a course needs this page to run inside Claude.</p>
+            <label for="c-note">What should change? (optional)</label>
+            <textarea id="c-note" rows="2" placeholder="e.g. Fold the new compounding material into the matching topics and merge anything that repeats."></textarea>
+            <label for="c-src">New material: paste text, or upload files</label>
+            <textarea id="c-src" rows="6" placeholder="Paste notes, guideline excerpts, slides or study guides."></textarea>
+            <div class="row"><label class="btn sm" for="cfile" style="cursor:pointer">Upload documents</label>
+              <input id="cfile" type="file" multiple accept=".pdf,.docx,.pptx,.txt,.md,.csv,.html,.htm" hidden>
+              <span id="c-fnote" class="muted small" aria-live="polite">PDF, Word, PowerPoint, text or Markdown.</span></div>
+            <div class="row"><button id="c-plan" class="btn primary">Analyze and propose a plan</button><button id="c-cancel" class="btn" hidden>Cancel</button></div>
+            <p id="c-status" class="muted small" aria-live="polite"></p>
+            <div id="c-planview"></div>
+          </div>
+        </details>
+      </div>
     </div>
 
     <div id="h-new" class="panel" hidden>
@@ -589,6 +607,212 @@ async function renameCourse(old,nu){
   }
   Lib.course=nu;flushSave();msg('Course renamed to '+nu+'.');renderHome();
 }
+/* ----- course integration: fold new material into a course and consolidate its lessons ----- */
+var INT={ctl:null,busy:false,plan:null,name:null,refs:null,ls:null,src:'',note:'',done:{}};
+function intStatus(t){$('#c-status').textContent=t}
+function intSync(){
+  if(!$('#c-planview'))return;
+  $('#n-noint').hidden=!!sampleFn;$('#c-plan').disabled=!sampleFn||INT.busy;
+  if(!INT.busy&&INT.name!==Lib.course&&(INT.plan||INT.name)){INT.plan=null;INT.name=null;INT.done={};$('#c-planview').innerHTML='';intStatus('')}
+}
+function intRefs(ls){
+  var map={},out=[];
+  ls.forEach(function(d,li){d.course.segments.forEach(function(sg,si){
+    var k='L'+(li+1)+'S'+(si+1);map[k]={li:li,si:si,seg:sg,d:d};
+    out.push(k+' | '+sg.title+' | '+(sg.key_points||[]).join('; ').slice(0,200));
+  })});
+  return {map:map,outline:out.join('\n'),lessons:ls.map(function(d,li){return 'L'+(li+1)+' = '+d.title}).join('\n')};
+}
+function intRules(lang){
+  var rules='\nCONTENT RULES (evidence standard)\n- State only what the NEW MATERIAL, the existing lesson and established guidelines support. Name the source domain when stating a finding. Never invent citations, numbers, doses, dates or quotations. If unsure, leave it out.\n- Give every segment an evidence rating: High, Moderate, Low or Insufficient, with one sentence saying why.\n- No moralizing, no filler, no opinion.\n'+
+   'AUDIO RULES\n- narration is written to be heard: short sentences, no lists, no markdown or symbols, no abbreviations such as e.g. or i.e., spell out terms on first use, write numbers the way they are spoken. 140 to 200 words per segment.\n'+
+   'QUIZ RULES\n- 2 questions per segment, 4 options each, exactly one correct, plausible distractors, never "all of the above" or "none of the above". The rationale says why the answer is right and why the most tempting wrong option is wrong.\n'+
+   'LANGUAGE: write in the language of the existing lesson ('+(lang||'en-US')+').\n';
+  return rules;
+}
+function intFmt(){
+  var fmt='{"kind":"segment","title":"","narration":"","key_points":["3 to 5 short points"],"visual":{"type":"flow|table|concepts","title":"","steps":["3 to 7 short steps"],"columns":["2 to 5"],"rows":[["..."]],"items":[{"term":"","def":""}]},"evidence":{"level":"High","note":""},"quiz":[{"q":"","options":["","","",""],"answer":0,"rationale":""}]}\n';
+  return fmt;
+}
+function intPlanPrompt(name,refs,src,note){
+  var cut=src.length>60000;if(cut)src=src.slice(0,60000);
+  return 'You are reorganizing a study course for a learner.\nCOURSE: '+name+'\nEXISTING LESSONS:\n'+refs.lessons+'\nEXISTING SEGMENTS (id | title | key points):\n'+refs.outline+'\n'+
+  (src?'\nNEW MATERIAL (the learner\'s own'+(cut?', truncated':'')+'):\n<<<\n'+src+'\n>>>\n':'')+(note?'\nLEARNER INSTRUCTION: '+note+'\n':'')+
+  '\nTASK: Design the revised course as the FEWEST lessons that still hold together by topic. Aim for 4 to 10 segments per lesson. Merge existing lessons that overlap. Put lessons and segments in a logical teaching order. Fold the NEW MATERIAL in where it belongs by topic: extend an existing segment with it, or add new segments beside related ones.\n'+
+  'RULES\n- Each planned segment is one of: {"keep":"L2S3"} to carry an existing segment over word for word (use this whenever the new material does not change it), or {"write":{"title":"","brief":"what this segment must cover, including what the new material adds","from":["L1S2"],"new":true}} for a segment that is new or rewritten. "from" lists the existing segments whose content it merges or builds on (empty if wholly new). "new" is true when it draws on the new material.\n'+
+  '- Every existing segment must appear exactly once: kept, or listed in the "from" of exactly one written segment. Never drop content. If two existing segments teach the same thing, merge them into one written segment.\n- Plan only content that the existing segments or the new material contain. Do not invent topics.\n'+
+  'OUTPUT: only one JSON object, no text outside it and no code fences:\n{"lessons":[{"title":"","summary":"two sentences","objectives":["3 to 5 measurable objectives"],"segments":[{"keep":"L1S1"},{"write":{"title":"","brief":"","from":["L1S2"],"new":true}}]}]}';
+}
+function intNormPlan(obj,refs){
+  var used={},out=[];
+  ((obj&&obj.lessons)||[]).forEach(function(L){
+    var segs=[];
+    ((L&&L.segments)||[]).forEach(function(s){
+      if(!s)return;
+      if(s.keep&&refs.map[s.keep]&&!used[s.keep]){used[s.keep]=1;segs.push({keep:s.keep});return}
+      if(s.write){
+        var w=s.write,from=(Array.isArray(w.from)?w.from:[]).filter(function(r,i,a){return refs.map[r]&&!used[r]&&a.indexOf(r)===i});
+        var brief=str(w.brief,700),title=str(w.title,140);
+        if(!brief&&!from.length&&!title)return;
+        from.forEach(function(r){used[r]=1});
+        segs.push({write:{title:title||'New segment',brief:brief,from:from,isnew:!!w.new}});
+      }
+    });
+    if(segs.length)out.push({title:str(L.title,140)||'Lesson',summary:str(L.summary,600),objectives:(Array.isArray(L.objectives)?L.objectives:[]).map(function(o){return str(o,240)}).filter(Boolean).slice(0,6),segs:segs});
+  });
+  if(!out.length)return null;
+  Object.keys(refs.map).forEach(function(k){
+    if(used[k])return;
+    var li=refs.map[k].li,tgt=out[out.length-1];
+    out.forEach(function(L){L.segs.forEach(function(s){var rs=s.keep?[s.keep]:s.write.from;if(rs.some(function(r){return refs.map[r].li===li}))tgt=L})});
+    tgt.segs.push({keep:k});used[k]=1;
+  });
+  return out;
+}
+function intPlanView(){
+  var P=INT.plan,refs=INT.refs,keep=0,wr=0,usesNew=false;
+  var h='<h3>Proposed plan: '+P.length+' lesson'+(P.length===1?'':'s')+' (now '+INT.ls.length+')</h3>';
+  P.forEach(function(L,i){
+    h+='<div><strong>'+(i+1)+'. '+esc(L.title)+'</strong><ul class="flist">';
+    L.segs.forEach(function(s){
+      if(s.keep){keep++;h+='<li><span>Kept: '+esc(refs.map[s.keep].seg.title)+'</span></li>'}
+      else{wr++;if(s.write.isnew)usesNew=true;
+        h+='<li><span><b>'+(s.write.from.length?'Rewritten':'New')+':</b> '+esc(s.write.title)+(s.write.from.length?' <span class="muted small">(from '+s.write.from.map(function(r){return esc(refs.map[r].seg.title)}).join('; ')+')</span>':'')+'</span></li>'}
+    });
+    h+='</ul></div>';
+  });
+  h+='<p class="muted small">'+keep+' segment'+(keep===1?'':'s')+' kept word for word. '+wr+' to write.'+(INT.src&&!usesNew?' The plan does not use your new material. Change the instruction and analyze again.':'')+' Lessons that are rebuilt start with fresh study data. Lessons left exactly as they were keep theirs.</p>';
+  h+='<div class="row"><button id="c-build" class="btn primary">'+(wr?'Write and apply this plan':'Apply this plan')+'</button><button id="c-discard" class="btn">Discard</button></div>';
+  $('#c-planview').innerHTML=h;
+}
+function intRun(){
+  if(INT.busy)return;
+  INT.busy=true;
+  return intPlan().then(function(){INT.busy=false;intSync()},function(e){INT.busy=false;intSync();throw e});
+}
+async function intPlan(){
+  await capsReady;
+  if(!sampleFn){msg('Reorganizing a course needs this page to run inside Claude.');return}
+  var name=Lib.course,ls=courseLessons(name).filter(function(d){return d.course&&d.course.segments});
+  var src=$('#c-src').value.trim(),note=$('#c-note').value.trim();
+  if(!ls.length)return;
+  if(!src&&!note){msg('Paste or upload new material, or say how to reorganize.');return}
+  var refs=intRefs(ls),ctl=INT.ctl=new AbortController();
+  INT.plan=null;INT.done={};INT.name=name;$('#c-planview').innerHTML='';
+  $('#c-plan').disabled=true;$('#c-cancel').hidden=false;
+  intStatus('Reading '+ls.length+' lesson'+(ls.length===1?'':'s')+' and your new material. This usually takes a minute or two.');
+  var txt='',err=null;
+  try{var res=await sampleFn(intPlanPrompt(name,refs,src,note),{signal:ctl.signal,cache:false,onText:function(u){txt=u.text}});txt=res.text||txt}
+  catch(e){err=e;if(e&&e.text)txt=e.text}
+  $('#c-cancel').hidden=true;INT.ctl=null;
+  if(err&&err.code==='cancelled'){intStatus('Cancelled. Nothing was changed.');return}
+  var plan=null;extract(txt,0).objs.forEach(function(o){if(!plan&&o&&Array.isArray(o.lessons))plan=intNormPlan(o,refs)});
+  if(!plan){intStatus((err&&err.code&&ERR[err.code])||'No usable plan came back. Try again, or use less material.');return}
+  INT.plan=plan;INT.refs=refs;INT.ls=ls;INT.src=src;INT.note=note;
+  intStatus('Review the plan below. Nothing has been changed yet.');
+  intPlanView();
+}
+function intWritePrompt(name,L,refs,src,note){
+  var writes=L.segs.filter(function(s){return s.write}).map(function(s){return s.write}),lang=refs.ls0.course.lang||'en-US',used=0,budget=60000;
+  var specs=writes.map(function(w,i){
+    var ex=w.from.map(function(r){var g=refs.map[r].seg;return '['+r+'] '+g.title+'\n'+String(g.narration).slice(0,2500)+'\nKey points: '+(g.key_points||[]).join('; ')}).join('\n\n');
+    if(used+ex.length>budget)ex=ex.slice(0,Math.max(0,budget-used));used+=ex.length;
+    return 'SEGMENT SPEC '+(i+1)+'\nTitle: '+w.title+'\nMust cover: '+w.brief+(ex?'\nEXISTING CONTENT TO BUILD ON (keep what is still correct, merge duplicates):\n'+ex:'')+(w.isnew?'\nUse the NEW MATERIAL for this segment.':'');
+  }).join('\n\n');
+  var useNew=writes.some(function(w){return w.isnew}),cut=src.length>40000;
+  return 'You are rewriting part of an existing audio-first study course.\nCOURSE: '+name+'\nLESSON: '+L.title+'\n\n'+specs+'\n'+
+  (useNew&&src?'\nNEW MATERIAL (the learner\'s own'+(cut?', truncated':'')+'). Base the work on this.\n<<<\n'+(cut?src.slice(0,40000):src)+'\n>>>\n':'')+(note?'\nLEARNER INSTRUCTION: '+note+'\n':'')+
+  intRules(lang)+'\nTASK: write exactly '+writes.length+' segments, one for each SEGMENT SPEC, in the same order. A merged segment may run up to 260 words. Then write one assessment object with 2 final-assessment questions per segment; "segment" is the 0-based number of the spec the question tests.\n'+
+  '\nOUTPUT: only JSON objects, one after another, no text outside them and no code fences: '+writes.length+' segment objects, then one assessment object.\n'+intFmt()+'{"kind":"assessment","items":[{"q":"","options":["","","",""],"answer":0,"rationale":"","segment":0}]}';
+}
+function intSplit(c){
+  if(JSON.stringify(c).length<=170000||c.segments.length<2)return [c];
+  var mid=Math.ceil(c.segments.length/2);
+  function part(a,b){var p=clone(c);p.segments=c.segments.slice(a,b);p.assessment=(c.assessment||[]).filter(function(q){return q.segment>=a&&q.segment<b}).map(function(q){var x=clone(q);x.segment-=a;return x});return p}
+  return intSplit(part(0,mid)).concat(intSplit(part(mid,c.segments.length)));
+}
+function intAssemble(name,P,refs,done){
+  return P.map(function(L,li){
+    var segs=[],assess=[],w=0,dn=done[li]||{segs:[],assess:[]},olds={},allKeep=true;
+    L.segs.forEach(function(s){
+      var idx=segs.length;
+      if(s.keep){
+        var r=refs.map[s.keep];segs.push(clone(r.seg));olds[r.li]=(olds[r.li]||[]).concat([r.si]);
+        (r.d.course.assessment||[]).forEach(function(q){if(q.segment===r.si){var x=clone(q);x.segment=idx;assess.push(x)}});
+      }else{
+        allKeep=false;segs.push(dn.segs[w]);
+        dn.assess.forEach(function(q){if(q.segment===w){var x=clone(q);x.segment=idx;assess.push(x)}});w++;
+      }
+    });
+    var ol=Object.keys(olds);
+    if(allKeep&&ol.length===1){
+      var od=refs.map['L'+(+ol[0]+1)+'S1'].d,same=olds[ol[0]].length===od.course.segments.length&&olds[ol[0]].every(function(v,i){return v===i});
+      if(same)return {reuse:od};
+    }
+    segs.forEach(function(g,i){if(!assess.some(function(q){return q.segment===i})&&g.quiz&&g.quiz[0]){var x=clone(g.quiz[0]);x.segment=i;assess.push(x)}});
+    var c0=refs.ls0.course;
+    return {course:{title:L.title,lang:c0.lang||'en-US',summary:L.summary||c0.summary||'',objectives:L.objectives.length?L.objectives:(c0.objectives||[]),
+      source_note:'Reorganized from '+refs.nLessons+' lesson'+(refs.nLessons===1?'':'s')+(INT.src?' with newly added material.':'.'),category:name,level:c0.level||'Professional',
+      segments:segs,assessment:assess,created:Date.now(),log:[{ts:Date.now(),text:'Course reorganized'+(INT.src?' with new material':'')}]}};
+  });
+}
+function intBuild(){
+  if(INT.busy||!INT.plan)return;
+  INT.busy=true;
+  return intBuild2().then(function(){INT.busy=false;intSync()},function(e){INT.busy=false;intSync();throw e});
+}
+async function intBuild2(){
+  var P=INT.plan,refs=INT.refs,name=INT.name,ctl=INT.ctl=new AbortController();
+  refs.ls0=INT.ls[0];refs.nLessons=INT.ls.length;
+  $('#c-build').disabled=true;$('#c-discard').disabled=true;$('#c-cancel').hidden=false;$('#c-plan').disabled=true;
+  var need=[];P.forEach(function(L,li){if(L.segs.some(function(s){return s.write})&&!INT.done[li])need.push(li)});
+  for(var n=0;n<need.length;n++){
+    var li=need[n],L=P[li],k=L.segs.filter(function(s){return s.write}).length,segs=[],assess=[],pos=0,err=null;
+    intStatus('Writing lesson '+(n+1)+' of '+need.length+': '+L.title+'. This can take a minute or two per lesson.');
+    function take(text){var r=extract(text,pos);pos=r.next;r.objs.forEach(function(o){if(o.kind==='segment'||o.narration)segs.push(o);else if(o.kind==='assessment'||o.items)assess=assess.concat(o.items||[])})}
+    try{var res=await sampleFn(intWritePrompt(name,L,refs,INT.src,INT.note),{signal:ctl.signal,cache:false,onText:function(u){take(u.text)}});take(res.text)}
+    catch(e){err=e;if(e&&e.text)take(e.text)}
+    if(err&&err.code==='cancelled'){intStatus('Cancelled. Nothing was changed.');$('#c-cancel').hidden=true;INT.ctl=null;intPlanView();return}
+    var ns=segs.map(function(o){return normSeg(o,true)}).filter(Boolean).slice(0,k);
+    if(ns.length<k){
+      $('#c-cancel').hidden=true;INT.ctl=null;intPlanView();
+      intStatus('Lesson "'+L.title+'": only '+ns.length+' of '+k+' segments came back'+(err&&err.code&&ERR[err.code]?'. '+ERR[err.code]:'')+'. Nothing was changed. Press the button to try again; finished lessons are kept.');return;
+    }
+    var na=assess.map(function(q){return normQ(q,true)}).filter(Boolean).map(function(q){q.segment=Math.min(k-1,q.segment);return q});
+    INT.done[li]={segs:ns,assess:na};
+  }
+  $('#c-cancel').hidden=true;INT.ctl=null;
+  var built=intAssemble(name,P,refs,INT.done);
+  await intApply(name,built);
+}
+async function intApply(name,built){
+  var ls=INT.ls,pron=[];
+  ls.forEach(function(d){(d.pron||[]).forEach(function(p){if(!pron.some(function(x){return JSON.stringify(x)===JSON.stringify(p)}))pron.push(p)})});
+  var base=Date.now(),n=0,ids=[],keepId={};
+  built.forEach(function(b){
+    if(b.reuse){keepId[b.reuse.id]=1;ids.push(b.reuse.id);return}
+    var parts=intSplit(b.course);
+    parts.forEach(function(pc,i){
+      if(parts.length>1)pc.title=b.course.title+' (part '+(i+1)+')';
+      var id='c'+(base+n++).toString(36),nd=newDoc(id,pc,{step:0,answers:{}});
+      nd.category=name;nd.pron=clone(pron);nd.created=base+n;
+      dirty[id]=nd;dirtyCourse[id]=true;Lib.docs[id]=nd;ids.push(id);
+    });
+  });
+  var prev=(name.slice(0,26)+' (previous)').slice(0,40),moved=0;
+  ls.forEach(function(d){
+    if(keepId[d.id])return;
+    var cur=Lib.docs[d.id]||d;cur.category=prev;cur.updated=Date.now();dirty[cur.id]=cur;moved++;
+    if(S.doc&&S.doc.id===cur.id)S.doc.category=prev;
+  });
+  var r=recFor(name);r.order=ids;
+  try{await saveRec(r)}catch(e){msg('The new lesson order could not be saved. It will use creation order.')}
+  await flushSave();
+  INT.plan=null;INT.done={};$('#c-planview').innerHTML='';$('#c-src').value='';$('#c-note').value='';
+  $('#c-fnote').textContent='PDF, Word, PowerPoint, text or Markdown.';
+  intStatus('Done. "'+name+'" now has '+ids.length+' lesson'+(ids.length===1?'':'s')+'.'+(moved?' Your '+moved+' earlier lesson'+(moved===1?' is':'s are')+' in the course "'+prev+'". Delete it once you are happy.':''));
+  Lib.course=name;INT.name=name;renderHome();
+}
 function openCourseExam(name){
   var ls=courseLessons(name),segs=[];
   ls.forEach(function(l,li){l.course.segments.forEach(function(sg){var g=clone(sg);g._li=li;g._lt=l.title;segs.push(g)})});
@@ -786,7 +1010,7 @@ function renderCourse(name){
 function renderLib(){
   if(Lib.course!=null&&!courseLessons(Lib.course).length)Lib.course=null;
   var inC=Lib.course!=null;
-  $('#lib-top').hidden=inC;$('#lib-course').hidden=!inC;
+  $('#lib-top').hidden=inC;$('#lib-course').hidden=!inC;$('#lib-integ').hidden=!inC;intSync();
   if(inC){renderCourse(Lib.course);return}
   var names=cats(),q=$('#lib-q').value.trim().toLowerCase(),sort=$('#lib-sort').value;
   var aggs=names.map(function(n){var g=courseAgg(n);g.name=n;return g}).filter(function(g){return g.ls.length&&(!q||g.name.toLowerCase().indexOf(q)>=0||g.ls.some(function(d){return String(d.title||'').toLowerCase().indexOf(q)>=0}))});
@@ -2046,6 +2270,10 @@ document.addEventListener('click',function(e){
     case 'x-md':return doExport('md');
     case 'x-html':return doExport('html');
     case 'u-run':return runUpdate();
+    case 'c-plan':return intRun();
+    case 'c-cancel':if(INT.ctl){try{INT.ctl.abort()}catch(e){}}return;
+    case 'c-build':return intBuild();
+    case 'c-discard':INT.plan=null;INT.done={};$('#c-planview').innerHTML='';intStatus('Plan discarded. Nothing was changed.');return;
     case 'u-cancel':return updCancel();
     case 'u-undo':return updUndo();
     case 'u-delbtn':return updDelete(t);
@@ -2062,6 +2290,7 @@ document.addEventListener('click',function(e){
   }
 });
 document.addEventListener('change',function(e){var t=e.target;if(t&&t.name==='um')updTab();if(t&&t.dataset&&t.dataset.mv&&t.value)moveLesson(t.dataset.mv,t.value)});
+$('#cfile').addEventListener('change',function(e){var fl=Array.prototype.slice.call(e.target.files);e.target.value='';loadFiles(fl,{ta:'#c-src',note:'#c-fnote'})});
 $('#ufile').addEventListener('change',function(e){var fl=Array.prototype.slice.call(e.target.files);e.target.value='';loadFiles(fl,{ta:'#u-src',note:'#u-fnote'})});
 $('#file').addEventListener('change',function(e){var fl=Array.prototype.slice.call(e.target.files);e.target.value='';loadFiles(fl)});
 function bindSettings(){
