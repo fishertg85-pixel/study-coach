@@ -306,6 +306,9 @@ details.aset summary{min-height:44px;display:flex;align-items:center;cursor:poin
       <div class="row"><button id="u-run" class="btn primary">Add to lesson</button><button id="u-cancel" class="btn" hidden>Cancel</button><button id="u-undo" class="btn" hidden>Undo last change</button></div>
       <p id="u-status" class="muted small" aria-live="polite"></p>
       <div id="u-log"></div>
+      <div id="u-delbox"><h3>Remove a segment</h3>
+        <div class="row"><select id="u-del" aria-label="Segment to remove"></select><button id="u-delbtn" class="btn">Remove segment</button></div>
+        <p class="muted small">The segment, its knowledge check and its final-assessment questions are removed, and your answers to the final assessment are cleared. Time you already spent studying stays in your totals. You can undo this until you leave the lesson.</p></div>
     </div>
     <div id="t-exam" class="panel" hidden>
       <div class="seg-head"><h2>Exam practice</h2><p class="muted">Board-style questions written fresh from this lesson each time you start. Scenario questions describe the conditions and never name the answer. Answer order is shuffled every time.</p></div>
@@ -1548,6 +1551,10 @@ function updTab(){
   $('#u-note-l').textContent=m==='add'?'What should the new segments cover? (optional)':'What should change? (optional if you paste new material)';
   $('#u-run').textContent=m==='add'?'Add to lesson':'Revise segment';
   $('#u-run').disabled=!sampleFn||U.busy;
+  var dsel=$('#u-del'),dc=dsel.value;
+  dsel.innerHTML=S.course.segments.map(function(sg,i){return '<option value="'+i+'">Segment '+(i+1)+': '+esc(sg.title)+'</option>'}).join('');
+  if(dc&&dsel.querySelector('option[value="'+dc+'"]'))dsel.value=dc;
+  $('#u-delbtn').disabled=S.course.segments.length<2||U.busy;
   $('#u-undo').hidden=!U.prev||U.busy;
   var log=(S.course.log||[]).slice().reverse();
   $('#u-log').innerHTML=log.length?'<h3>Update history</h3><ul class="flist">'+log.map(function(l){return '<li><span>'+esc(l.text)+'</span><span class="muted">'+fmtDateTime(l.ts)+'</span></li>'}).join('')+'</ul>':'';
@@ -1623,10 +1630,49 @@ async function runUpdate2(){
   $('#u-status').textContent=(mode==='add'?'Added '+ns.length+' segment'+(ns.length===1?'':'s')+(na.length?' and '+na.length+' assessment questions':'')+'. Find '+(ns.length===1?'it':'them')+' in Contents.':'Segment '+(idx+1)+' was rewritten.')+(err&&err.code!=='cancelled'?' The connection ended early, so this may be shorter than requested.':'');
   updTab();
 }
+function shiftKeys(o,idx){
+  var n={};Object.keys(o||{}).forEach(function(k){
+    if(!/^\d+$/.test(k)){n[k]=o[k];return}
+    var j=+k;if(j===idx)return;n[j>idx?String(j-1):k]=o[k];
+  });return n;
+}
+function updDelete(btn){
+  if(!S.course||S.course.segments.length<2||U.busy)return;
+  if(btn.dataset.armed!=='1'){
+    btn.dataset.armed='1';btn.textContent='Tap again to remove';
+    setTimeout(function(){btn.dataset.armed='';btn.textContent='Remove segment'},4000);return;
+  }
+  btn.dataset.armed='';btn.textContent='Remove segment';
+  var idx=parseInt($('#u-del').value,10),c=S.course,d=S.doc;
+  if(!(idx>=0&&idx<c.segments.length))return;
+  var title=c.segments[idx].title;
+  U.prev={course:JSON.stringify(c),answers:JSON.stringify(S.answers),
+    extra:JSON.stringify({stats:d.stats,sessions:d.sessions,attempts:d.attempts,step:S.step})};
+  c.segments.splice(idx,1);
+  c.assessment=(c.assessment||[]).filter(function(q){return q.segment!==idx}).map(function(q){if(q.segment>idx)q.segment--;return q});
+  var ent=[];Object.keys(S.answers).forEach(function(k){
+    var m=/^s(\d+)q(\d+)$/.exec(k);if(!m)return;
+    var j=+m[1];if(j===idx)return;ent.push(['s'+(j>idx?j-1:j)+'q'+m[2],S.answers[k]]);
+  });
+  Object.keys(S.answers).forEach(function(k){delete S.answers[k]});
+  ent.forEach(function(e){S.answers[e[0]]=e[1]});
+  S.revealed={};S.attemptDone={};
+  d.stats.segMs=shiftKeys(d.stats.segMs,idx);d.stats.segPasses=shiftKeys(d.stats.segPasses,idx);
+  d.sessions.forEach(function(se){se.seg=shiftKeys(se.seg,idx)});
+  d.attempts=d.attempts.filter(function(a){var m=/^s(\d+)$/.exec(a.scope);return !(m&&+m[1]===idx)}).map(function(a){var m=/^s(\d+)$/.exec(a.scope);if(m&&+m[1]>idx)a.scope='s'+(+m[1]-1);return a});
+  if(S.step>idx)S.step--;
+  S.step=Math.min(S.step,c.segments.length);
+  c.log=(c.log||[]).concat([{ts:Date.now(),text:'Removed segment '+(idx+1)+': '+title}]).slice(-30);
+  touch(true,true);
+  renderSteps();renderContents();renderGuide();setStep(S.step);
+  $('#u-status').textContent='Removed segment '+(idx+1)+': '+title+'.';
+  updTab();
+}
 function updUndo(){
   if(!U.prev||!S.doc)return;
   var cs=JSON.parse(U.prev.course),ans=JSON.parse(U.prev.answers);
   S.doc.course=S.course=cs;
+  if(U.prev.extra){var ex=JSON.parse(U.prev.extra);S.doc.stats=ex.stats;S.doc.sessions=ex.sessions;S.doc.attempts=ex.attempts;S.step=ex.step}
   Object.keys(S.answers).forEach(function(k){delete S.answers[k]});Object.assign(S.answers,ans);
   S.attemptDone={};U.prev=null;
   touch(true,true);renderSteps();renderContents();renderGuide();setStep(Math.min(S.step,cs.segments.length));
@@ -1861,6 +1907,7 @@ document.addEventListener('click',function(e){
     case 'u-run':return runUpdate();
     case 'u-cancel':return updCancel();
     case 'u-undo':return updUndo();
+    case 'u-delbtn':return updDelete(t);
     case 'ex-start':return startExam();
     case 'ex-next':return exNext();
     case 'ex-finish':return exFinish();
