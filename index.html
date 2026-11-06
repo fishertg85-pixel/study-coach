@@ -206,7 +206,8 @@ details.aset summary{min-height:44px;display:flex;align-items:center;cursor:poin
           <label>Voice engine<select id="s-engine"><option value="natural">Natural voice (Kokoro, recommended)</option><option value="browser">Device voice</option></select></label>
           <label id="lbl-nat">Voice<select id="s-nvoice"></select></label>
           <label id="lbl-dev">Voice<select id="s-voice"></select></label></div>
-        <p id="nv-status" class="muted small" aria-live="polite"></p></details>
+        <p id="nv-status" class="muted small" aria-live="polite"></p>
+        <div class="row" style="padding-bottom:10px"><button id="nv-retry" class="btn sm" hidden>Try the natural voice again</button></div></details>
   <p id="msg" class="msg" role="status" aria-live="polite" hidden></p>
 
   <!-- HOME -->
@@ -1631,7 +1632,7 @@ function nvBadge(){
   e.textContent=(settings.engine==='natural'&&!NV.failed&&(!S.course||useNatural()))?'· Voice: '+(v?v[1]:'natural')+(NV.tts?'':' (loads on first play)'):'· Voice: device';
 }
 function useNatural(){return settings.engine==='natural'&&!NV.failed&&/^en/i.test((S.course&&S.course.lang)||'en')}
-function nvStatus(t){nvBadge();var e=$('#nv-status');if(e)e.textContent=t||'';if(S.playing&&t)setStatus(t)}
+function nvStatus(t){nvBadge();var e=$('#nv-status');if(e)e.textContent=t||'';var rb=$('#nv-retry');if(rb)rb.hidden=!NV.failed;if(S.playing&&t)setStatus(t);if(NV.failed&&t&&/could not|stopped/.test(t))msg(t)}
 function wavBlob(f32,sr){
   var n=f32.length,b=new ArrayBuffer(44+n*2),v=new DataView(b);
   function ws(o,t){for(var i=0;i<t.length;i++)v.setUint8(o+i,t.charCodeAt(i))}
@@ -1653,7 +1654,9 @@ function loadNatural(){
   nvStatus('Loading the natural voice. The first time it downloads a model, so keep this page open.');
   NV.loading=(async function(){
     try{
+      var stage='voice code';
       var m=await (window.__kokoroLoader?window.__kokoroLoader():import('https://cdn.jsdelivr.net/npm/kokoro-js@1.2.0/dist/kokoro.web.js'));
+      stage='voice model';
       var files={};
       NV.tts=await m.KokoroTTS.from_pretrained('onnx-community/Kokoro-82M-v1.0-ONNX',{dtype:'q8',device:'wasm',progress_callback:function(p){
         if(p&&p.status==='progress'&&p.file&&p.total){files[p.file]={l:p.loaded,t:p.total};
@@ -1663,7 +1666,8 @@ function loadNatural(){
       return true;
     }catch(e){
       NV.failed=true;NV.tts=null;
-      nvStatus('The natural voice could not load in this view, so the device voice is used.');
+      NV.err='the '+stage+' did not load ('+String((e&&(e.message||e.name))||e).slice(0,160)+')';
+      nvStatus('The natural voice could not load: '+NV.err+'. The device voice is used.');
       return false;
     }finally{NV.loading=null}
   })();
@@ -1691,11 +1695,11 @@ function speakNatural(text){
     nvSynth(text).then(function(url){
       if(done)return;
       a.onended=function(){T.speech=Date.now();fin(true)};
-      a.onerror=function(){fin('nostart')};
+      a.onerror=function(){NV.err='the audio player reported an error';fin('nostart')};
       a.src=url;a.playbackRate=settings.rate;
-      var pr=a.play();if(pr&&pr.catch)pr.catch(function(){fin('nostart')});
+      var pr=a.play();if(pr&&pr.catch)pr.catch(function(e){NV.err='the browser blocked playback ('+((e&&e.name)||e)+')';fin('nostart')});
       a.onplaying=function(){T.speech=Date.now()};
-    },function(){fin('nostart')});
+    },function(e){NV.err='speech generation failed ('+((e&&(e.message||e.name))||e)+')';fin('nostart')});
   });
 }
 function speak(text){
@@ -1705,7 +1709,7 @@ function speak(text){
   return ready.then(function(ok){
     if(!ok||!useNatural())return speakDevice(text);
     return speakNatural(text).then(function(r){
-      if(r==='nostart'){NV.failed=true;nvStatus('The natural voice stopped working, so the device voice is used.');return speakDevice(text)}
+      if(r==='nostart'){NV.failed=true;nvStatus('The natural voice stopped working'+(NV.err?': '+NV.err:'')+'. The device voice is used.');return speakDevice(text)}
       return r;
     });
   });
@@ -2296,6 +2300,7 @@ document.addEventListener('click',function(e){
     case 'x-md':return doExport('md');
     case 'x-html':return doExport('html');
     case 'u-run':return runUpdate();
+    case 'nv-retry':NV.failed=false;NV.err='';nvStatus('');nvBadge();return loadNatural();
     case 'c-plan':return intRun();
     case 'c-cancel':if(INT.ctl){try{INT.ctl.abort()}catch(e){}}return;
     case 'c-build':return intBuild();
